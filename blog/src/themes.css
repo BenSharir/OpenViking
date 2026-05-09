@@ -1,12 +1,6 @@
-/* themes.css — five complete document-site themes.
- * Switch by setting `data-theme` on <html>: folio | console | atlas | garden | brutalist.
+/* themes.css — four document-site themes.
+ * Switch by setting `data-theme` on <html>: folio | console | garden | kami.
  * Common base first, then per-theme overrides.
- *
- * Variables follow OpenProps style: --theme-* are the contract.
- *   --th-bg, --th-bg-2, --th-ink, --th-mute, --th-line, --th-accent, --th-accent-2,
- *   --th-font-display, --th-font-body, --th-font-mono,
- *   --th-radius, --th-shadow,
- *   --th-measure (max prose width), --th-rhythm (vertical rhythm unit)
  */
 
 /* ===========================================================
@@ -171,27 +165,9 @@ a.b-tag:hover { color: var(--th-ink); border-color: var(--th-ink); }
 .b-tm__item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: transparent; border: 0; border-radius: 6px; text-align: left; cursor: pointer; color: var(--th-ink); width: 100%; }
 .b-tm__item:hover { background: var(--th-bg-2); }
 .b-tm__item.is-active { background: var(--th-bg-2); }
-.b-tm__sw { width: 22px; height: 22px; border-radius: 50%; border: 1px solid rgba(0,0,0,0.12); position: relative; overflow: hidden; flex-shrink: 0; }
-.b-tm__sw::after { content: ''; position: absolute; left: 50%; top: 0; bottom: 0; right: 0; }
 .b-tm__txt { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; }
 .b-tm__name { font-family: var(--th-font-display); font-size: 13px; font-weight: 600; color: var(--th-ink); }
 .b-tm__blurb { font-family: var(--th-font-body); font-size: 11px; color: var(--th-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* Per-theme swatch colors */
-.b-tm__sw--folio    { background: #f6f1e7; }
-.b-tm__sw--folio::after    { background: #b3261e; }
-.b-tm__sw--console  { background: #0d1117; border-color: rgba(255,255,255,0.15); }
-.b-tm__sw--console::after  { background: #56d364; }
-.b-tm__sw--atlas    { background: #fefdfb; }
-.b-tm__sw--atlas::after    { background: #ff4500; }
-.b-tm__sw--garden   { background: #faf7f2; }
-.b-tm__sw--garden::after   { background: #6b8a5c; }
-.b-tm__sw--brutalist { background: #ffffff; border-radius: 0; }
-.b-tm__sw--brutalist::after { background: #ff006e; }
-[data-theme="brutalist"] .b-tm__trigger,
-[data-theme="brutalist"] .b-tm__menu,
-[data-theme="brutalist"] .b-tm__item,
-[data-theme="brutalist"] .b-tm__sw { border-radius: 0; }
-[data-theme="brutalist"] .b-tm__menu { box-shadow: 4px 4px 0 var(--th-ink); }
 @media (max-width: 640px) {
   .b-tm__label { display: none; }
   .b-tm__trigger { padding: 6px 8px; }
@@ -393,63 +369,9 @@ a.b-tag:hover { color: var(--th-ink); border-color: var(--th-ink); }
 [data-theme="console"] .b-a::before { content: '['; color: var(--th-mute); }
 [data-theme="console"] .b-a::after { content: ']'; color: var(--th-mute); }
 
-/* ===========================================================
-   THEME 3: ATLAS — bold magazine, asymmetric, big type
-   =========================================================== */
-[data-theme="atlas"] {
-  --th-bg: #fefdfb;
-  --th-bg-2: #f3f0e9;
-  --th-ink: #0a0a0a;
-  --th-mute: #6e6e6e;
-  --th-line: #0a0a0a;
-  --th-accent: #ff4500;
-  --th-accent-2: #1a4ee0;
-  --th-font-display: 'Archivo', 'Archivo Black', ui-sans-serif, system-ui, sans-serif;
-  --th-font-body: 'Archivo', ui-sans-serif, system-ui, sans-serif;
-  --th-font-mono: 'IBM Plex Mono', ui-monospace, monospace;
-  --th-radius: 0;
-  --th-shadow: 8px 8px 0 var(--th-ink);
-  --th-measure: 800px;
-  --th-tk-st: #1a4ee0;
-  --th-tk-kw: #ff4500;
-}
-[data-theme="atlas"] body { font-size: 17px; line-height: 1.55; }
-[data-theme="atlas"] .b-h { font-family: var(--th-font-display); font-weight: 800; letter-spacing: -0.03em; }
-[data-theme="atlas"] .b-h1 { font-size: clamp(48px, 8vw, 88px); line-height: 0.95; font-stretch: condensed; text-transform: uppercase; }
-[data-theme="atlas"] .b-h2 { font-size: clamp(32px, 5vw, 56px); line-height: 1; text-transform: uppercase; font-stretch: condensed; margin: 80px 0 24px; }
-[data-theme="atlas"] .b-h3 { font-size: clamp(22px, 3vw, 30px); text-transform: uppercase; letter-spacing: 0; }
-[data-theme="atlas"] .b-lead { font-family: var(--th-font-display); font-size: clamp(22px, 2.6vw, 30px); font-weight: 400; line-height: 1.3; color: var(--th-ink); }
-[data-theme="atlas"] .b-hero__title { font-family: var(--th-font-display); font-weight: 900; font-size: clamp(72px, 14vw, 220px); line-height: 0.85; text-transform: uppercase; letter-spacing: -0.04em; font-stretch: condensed; max-width: none; }
-[data-theme="atlas"] .b-post__title { font-weight: 900; text-transform: uppercase; line-height: 0.95; font-stretch: condensed; }
-[data-theme="atlas"] .b-card { border-width: 1.5px; border-radius: 0; transition: transform 0.18s, box-shadow 0.18s; }
-[data-theme="atlas"] .b-card:hover { transform: translate(-3px, -3px); box-shadow: 6px 6px 0 var(--th-ink); border-color: var(--th-ink); }
-[data-theme="atlas"] .b-card__title { text-transform: uppercase; font-weight: 800; letter-spacing: -0.02em; }
-[data-theme="atlas"] .b-callout { border: 2px solid var(--th-ink); border-left-width: 8px; border-radius: 0; background: var(--th-bg); }
-[data-theme="atlas"] .b-callout--warn { border-left-color: var(--th-accent); background: #fff5f0; }
-[data-theme="atlas"] .b-pull { font-family: var(--th-font-display); font-weight: 800; text-transform: uppercase; line-height: 0.95; font-size: clamp(28px, 4vw, 44px); border-color: var(--th-ink); border-width: 3px 0; color: var(--th-accent); }
-[data-theme="atlas"] .b-tag { border-color: var(--th-ink); border-radius: 0; text-transform: uppercase; font-weight: 700; }
-[data-theme="atlas"] .b-pre { border: 2px solid var(--th-ink); border-radius: 0; background: var(--th-ink); color: #f3f0e9; }
-[data-theme="atlas"] .b-pre__bar { background: var(--th-ink); border-color: #333; color: #f3f0e9; }
-[data-theme="atlas"] .b-pre__file { color: var(--th-accent); }
-[data-theme="atlas"] .b-pre .tk-id { color: #f3f0e9; }
-[data-theme="atlas"] .b-pre .tk-cm { color: #888; }
-[data-theme="atlas"] .b-pre .tk-st { color: #ffaa55; }
-[data-theme="atlas"] .b-pre .tk-kw { color: #ff4500; }
-[data-theme="atlas"] .b-pre .tk-nu { color: #5cb6ff; }
-[data-theme="atlas"] .b-pre .tk-pn { color: #aaa; }
-[data-theme="atlas"] .b-pre .tk-op { color: var(--th-accent); }
-[data-theme="atlas"] .b-pre .tk-ty { color: #5cb6ff; }
-[data-theme="atlas"] .b-brand__mark { border-radius: 0; box-shadow: 3px 3px 0 var(--th-ink); }
-[data-theme="atlas"] .b-brand__name { font-weight: 900; text-transform: uppercase; font-stretch: condensed; }
-[data-theme="atlas"] .b-seg { border-radius: 0; padding: 0; border-width: 1.5px; }
-[data-theme="atlas"] .b-seg button { border-radius: 0; font-weight: 700; }
-[data-theme="atlas"] .b-select { border-radius: 0; border-width: 1.5px; font-weight: 700; }
-[data-theme="atlas"] .b-quote { border-left-width: 6px; font-family: var(--th-font-display); font-style: normal; font-weight: 800; font-size: 1.4em; line-height: 1.2; }
-[data-theme="atlas"] .b-hero__eyebrow, [data-theme="atlas"] .b-post__eyebrow { font-weight: 700; }
-[data-theme="atlas"] .b-card--featured .b-card__title { font-size: clamp(32px, 6vw, 64px); }
 
 /* ===========================================================
-   THEME 4: GARDEN — soft, warm, gentle, hand-tended
+   THEME 3: GARDEN — soft, warm, gentle, hand-tended
    =========================================================== */
 [data-theme="garden"] {
   --th-bg: #faf7f2;
@@ -502,65 +424,48 @@ a.b-tag:hover { color: var(--th-ink); border-color: var(--th-ink); }
 [data-theme="garden"] .b-p--drop::first-letter { color: var(--th-accent); font-style: italic; }
 
 /* ===========================================================
-   THEME 5: BRUTALIST — raw, monospace headlines, hard
+   THEME 4: KAMI — ink on parchment, restrained, editorial
    =========================================================== */
-[data-theme="brutalist"] {
-  --th-bg: #ffffff;
-  --th-bg-2: #f0f0f0;
-  --th-ink: #000000;
-  --th-mute: #555555;
-  --th-line: #000000;
-  --th-accent: #ff006e;
-  --th-accent-2: #fffd00;
-  --th-font-display: 'Space Mono', 'JetBrains Mono', ui-monospace, monospace;
-  --th-font-body: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
-  --th-font-mono: 'Space Mono', ui-monospace, monospace;
-  --th-radius: 0;
-  --th-shadow: 6px 6px 0 var(--th-ink);
-  --th-measure: 760px;
-  --th-tk-st: #009933;
-  --th-tk-kw: #ff006e;
+[data-theme="kami"] {
+  --th-bg: #f5f4ed;
+  --th-bg-2: #eceae0;
+  --th-ink: #1a1a1a;
+  --th-mute: #8c8578;
+  --th-line: #d8d4c8;
+  --th-accent: #1B365D;
+  --th-accent-2: #6b4c3b;
+  --th-font-display: Charter, 'Noto Serif SC', Georgia, serif;
+  --th-font-body: Charter, 'Noto Serif SC', Georgia, serif;
+  --th-font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --th-radius: 2px;
+  --th-shadow: 0 4px 12px rgba(26, 26, 26, 0.06);
+  --th-measure: 720px;
+  --th-tk-st: #6b4c3b;
+  --th-tk-kw: #1B365D;
 }
-[data-theme="brutalist"] body { font-size: 16px; line-height: 1.6; }
-[data-theme="brutalist"] .b-h { font-family: var(--th-font-display); font-weight: 700; letter-spacing: -0.02em; }
-[data-theme="brutalist"] .b-h1 { background: var(--th-accent-2); padding: 16px 20px; display: inline-block; }
-[data-theme="brutalist"] .b-h2 { border-top: 4px solid var(--th-ink); padding-top: 24px; }
-[data-theme="brutalist"] .b-lead { font-family: var(--th-font-display); font-size: clamp(18px, 2vw, 22px); line-height: 1.4; }
-[data-theme="brutalist"] .b-hero__title { font-family: var(--th-font-display); font-weight: 700; line-height: 0.95; letter-spacing: -0.04em; text-transform: uppercase; }
-[data-theme="brutalist"] .b-post__title { font-family: var(--th-font-display); text-transform: uppercase; line-height: 0.95; background: var(--th-accent-2); display: inline; padding: 4px 12px; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
-[data-theme="brutalist"] .b-card { border: 2px solid var(--th-ink); border-radius: 0; background: var(--th-bg); transition: transform 0.12s, box-shadow 0.12s; }
-[data-theme="brutalist"] .b-card:hover { transform: translate(-4px, -4px); box-shadow: 8px 8px 0 var(--th-ink); }
-[data-theme="brutalist"] .b-card__title { font-family: var(--th-font-display); text-transform: uppercase; font-weight: 700; }
-[data-theme="brutalist"] .b-card__cover { border-bottom: 2px solid var(--th-ink); }
-[data-theme="brutalist"] .b-callout { border: 2px solid var(--th-ink); border-radius: 0; background: var(--th-accent-2); }
-[data-theme="brutalist"] .b-callout--warn { background: var(--th-accent); color: var(--th-bg); }
-[data-theme="brutalist"] .b-callout--warn .b-callout__label { color: var(--th-bg); }
-[data-theme="brutalist"] .b-callout--tip { background: #00ff88; }
-[data-theme="brutalist"] .b-pull { border: 2px solid var(--th-ink); border-left: 0; border-right: 0; padding: 20px 0; font-family: var(--th-font-display); font-weight: 700; color: var(--th-ink); }
-[data-theme="brutalist"] .b-tag { border: 2px solid var(--th-ink); border-radius: 0; font-weight: 700; text-transform: uppercase; padding: 3px 9px; background: var(--th-bg); }
-[data-theme="brutalist"] .b-tag:hover { background: var(--th-accent-2); }
-[data-theme="brutalist"] .b-pre { border: 2px solid var(--th-ink); border-radius: 0; background: var(--th-ink); color: #00ff88; box-shadow: var(--th-shadow); }
-[data-theme="brutalist"] .b-pre__bar { background: var(--th-accent); color: var(--th-bg); border-color: var(--th-bg); }
-[data-theme="brutalist"] .b-pre__file { color: var(--th-bg); font-weight: 700; }
-[data-theme="brutalist"] .b-pre__lang { color: var(--th-bg); }
-[data-theme="brutalist"] .b-pre .tk-id { color: #00ff88; }
-[data-theme="brutalist"] .b-pre .tk-st { color: #fffd00; }
-[data-theme="brutalist"] .b-pre .tk-kw { color: var(--th-accent); font-weight: 700; }
-[data-theme="brutalist"] .b-pre .tk-nu { color: #00d4ff; }
-[data-theme="brutalist"] .b-pre .tk-cm { color: #888; }
-[data-theme="brutalist"] .b-pre .tk-pn { color: #888; }
-[data-theme="brutalist"] .b-pre .tk-op { color: var(--th-accent); }
-[data-theme="brutalist"] .b-pre .tk-ty { color: #00d4ff; }
-[data-theme="brutalist"] .b-brand__mark { border: 2px solid var(--th-ink); border-radius: 0; background: var(--th-accent-2); color: var(--th-ink); }
-[data-theme="brutalist"] .b-brand__name { font-family: var(--th-font-display); text-transform: uppercase; }
-[data-theme="brutalist"] .b-seg { border: 2px solid var(--th-ink); border-radius: 0; padding: 0; }
-[data-theme="brutalist"] .b-seg button { border-radius: 0; font-weight: 700; text-transform: uppercase; }
-[data-theme="brutalist"] .b-seg button.is-active { background: var(--th-accent); color: var(--th-bg); }
-[data-theme="brutalist"] .b-select { border: 2px solid var(--th-ink); border-radius: 0; font-weight: 700; text-transform: uppercase; }
-[data-theme="brutalist"] .b-figure__media { border: 2px solid var(--th-ink); border-radius: 0; }
-[data-theme="brutalist"] .b-quote { border-left: 6px solid var(--th-accent); background: var(--th-bg-2); padding: 20px 24px; font-style: normal; font-family: var(--th-font-display); }
-[data-theme="brutalist"] .b-hr { border-top: 4px solid var(--th-ink); max-width: 120px; }
-[data-theme="brutalist"] .b-hr--ornament::before { content: '■ ■ ■'; color: var(--th-ink); letter-spacing: 0.3em; }
-[data-theme="brutalist"] .b-a { background: linear-gradient(transparent 65%, var(--th-accent-2) 65%); text-decoration: none; padding: 0 2px; }
-[data-theme="brutalist"] .b-a:hover { background: var(--th-accent); color: var(--th-bg); }
-[data-theme="brutalist"] .b-topbar { border-bottom: 3px solid var(--th-ink); }
+[data-theme="kami"] body { font-size: 18px; line-height: 1.75; }
+[data-theme="kami"] .b-h { font-weight: 500; letter-spacing: -0.01em; }
+[data-theme="kami"] .b-h1 { font-weight: 500; }
+[data-theme="kami"] .b-lead { color: #5a554a; }
+[data-theme="kami"] .b-hero__title { font-weight: 500; letter-spacing: -0.015em; }
+[data-theme="kami"] .b-post__title { font-weight: 500; }
+[data-theme="kami"] .b-card { border-color: var(--th-line); }
+[data-theme="kami"] .b-card:hover { border-color: var(--th-accent); }
+[data-theme="kami"] .b-card__title { font-weight: 500; }
+[data-theme="kami"] .b-callout { border-left: 2px solid var(--th-accent); border-radius: 2px; }
+[data-theme="kami"] .b-pull { color: var(--th-accent); border-color: var(--th-line); }
+[data-theme="kami"] .b-pre { background: #1a1a1a; color: #e8e4da; border-color: #1a1a1a; }
+[data-theme="kami"] .b-pre__bar { background: #111; color: #8c8578; border-color: #333; }
+[data-theme="kami"] .b-pre__file { color: #e8e4da; }
+[data-theme="kami"] .b-pre .tk-id { color: #e8e4da; }
+[data-theme="kami"] .b-pre .tk-cm { color: #666; }
+[data-theme="kami"] .b-pre .tk-st { color: #c9956b; }
+[data-theme="kami"] .b-pre .tk-kw { color: #7b9ec4; }
+[data-theme="kami"] .b-pre .tk-nu { color: #c9956b; }
+[data-theme="kami"] .b-pre .tk-pn { color: #666; }
+[data-theme="kami"] .b-pre .tk-op { color: #8c8578; }
+[data-theme="kami"] .b-pre .tk-ty { color: #7b9ec4; }
+[data-theme="kami"] .b-p--drop::first-letter { color: var(--th-accent); }
+[data-theme="kami"] .b-quote { border-left-color: var(--th-accent); }
+[data-theme="kami"] .b-tag { background: transparent; }
+[data-theme="kami"] .b-brand__mark { border-radius: 2px; }

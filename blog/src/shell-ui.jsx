@@ -63,7 +63,6 @@ function Topbar({ lang, theme, onLang, onTheme, onHome, S }) {
                     role="option"
                     aria-selected={theme === t.id}
                     onClick={() => { onTheme(t.id); setOpen(false); }}>
-                    <span className={`b-tm__sw b-tm__sw--${t.id}`} aria-hidden="true" />
                     <span className="b-tm__txt">
                       <span className="b-tm__name">{pickLocale(t.label, lang)}</span>
                       <span className="b-tm__blurb">{pickLocale(t.blurb, lang)}</span>
@@ -110,7 +109,7 @@ function IndexView({ lang, t, theme, navigate, S, formatDate }) {
         <div className="b-hero__meta">
           <span className="b-hero__count">{S.countLabel(all.length)}</span>
           <span>{LANGS.length} {lang === 'zh' ? '语言' : 'languages'}</span>
-          <span>{THEMES.length} {lang === 'zh' ? '主题' : 'themes'}</span>
+          <span>{THEMES.length} {lang === 'zh' ? '个主题' : 'themes'}</span>
         </div>
       </section>
 
@@ -301,7 +300,7 @@ function Footer({ lang, S }) {
       <div className="b-footer__cols">
         <span>© 2026 {S.siteName}</span>
         <span>·</span>
-        <span>{lang === 'zh' ? '使用 React + 五种主题搭建' : 'Built with React + five themes'}</span>
+        <span>{lang === 'zh' ? '使用 React 搭建' : 'Built with React'}</span>
       </div>
       <div className="b-footer__cols">
         <a className="b-a" href="#/">{S.backToIndex.replace('← ', '')}</a>

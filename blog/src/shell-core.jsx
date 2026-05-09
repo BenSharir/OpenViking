@@ -60,11 +60,11 @@ export const LANGS = [
 
 export const SHELL_STRINGS = {
   en: {
-    siteName: 'Blog Station',
-    siteSub: 'A field guide',
-    indexEyebrow: 'Volume 26 / 2026',
-    indexTitle: 'Notes on building, slowly.',
-    indexLede: 'A small library of essays on engineering, design and the texture of attention. Five themes, two languages, one quiet corner of the web.',
+    siteName: 'OpenViking Blog',
+    siteSub: 'Engineering notes',
+    indexEyebrow: '2026',
+    indexTitle: 'Blog in Public.',
+    indexLede: 'Technical notes from the OpenViking team — on agents, protocols, and the systems behind them.',
     countLabel: (n) => `${n} essays`,
     filterAll: 'All',
     sortNewest: 'Newest first',
@@ -86,11 +86,11 @@ export const SHELL_STRINGS = {
     tags: 'Tags',
   },
   zh: {
-    siteName: '博客站',
-    siteSub: '田野手册',
-    indexEyebrow: '第 26 卷 / 2026',
-    indexTitle: '关于慢慢建造的笔记。',
-    indexLede: '一个关于工程、设计与注意力质地的小型文集。五种主题,两种语言,网络的一个安静角落。',
+    siteName: 'OpenViking 博客',
+    siteSub: '技术笔记',
+    indexEyebrow: '2026',
+    indexTitle: '感受 AI。',
+    indexLede: 'OpenViking 团队的技术笔记 — 关于 Agent、协议，以及背后的系统。',
     countLabel: (n) => `${n} 篇文章`,
     filterAll: '全部',
     sortNewest: '最新优先',
@@ -131,11 +131,10 @@ export function makeFormatDate(lang) {
 /* ---------- theme persistence ---------- */
 
 export const THEMES = [
-  { id: 'folio',     label: { en: 'Folio',     zh: '文集' }, blurb: { en: 'Editorial · serif', zh: '编辑型 · 衬线' } },
-  { id: 'console',   label: { en: 'Console',   zh: '终端' }, blurb: { en: 'Terminal · mono',  zh: '终端型 · 等宽' } },
-  { id: 'atlas',     label: { en: 'Atlas',     zh: '图志' }, blurb: { en: 'Magazine · bold',  zh: '杂志型 · 粗体' } },
-  { id: 'garden',    label: { en: 'Garden',    zh: '园圃' }, blurb: { en: 'Soft · serif',     zh: '温柔型 · 衬线' } },
-  { id: 'brutalist', label: { en: 'Brutalist', zh: '粗野' }, blurb: { en: 'Raw · mono',       zh: '原始型 · 等宽' } },
+  { id: 'folio',   label: { en: 'Folio',   zh: '文集' }, blurb: { en: 'Serif · warm',    zh: '衬线 · 暖色' } },
+  { id: 'console', label: { en: 'Console', zh: '终端' }, blurb: { en: 'Mono · dark',     zh: '等宽 · 暗色' } },
+  { id: 'garden',  label: { en: 'Garden',  zh: '园圃' }, blurb: { en: 'Serif · gentle',  zh: '衬线 · 柔和' } },
+  { id: 'kami',    label: { en: 'Kami',    zh: '纸' },   blurb: { en: 'Ink · parchment', zh: '墨蓝 · 纸色' } },
 ];
 
 export function applyTheme(theme) {
