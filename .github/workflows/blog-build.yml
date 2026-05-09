@@ -1,0 +1,41 @@
+name: Blog Build & Deploy
+
+on:
+  push:
+    branches: [blog]
+    paths: ['blog/**']
+  pull_request:
+    branches: [main]
+    paths: ['blog/**']
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: blog
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: blog/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/upload-pages-artifact@v3
+        if: github.ref == 'refs/heads/blog'
+        with:
+          path: blog/dist
+
+  deploy:
+    if: github.ref == 'refs/heads/blog'
+    needs: build
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/deploy-pages@v4

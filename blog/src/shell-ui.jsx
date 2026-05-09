@@ -1,10 +1,14 @@
-/* shell-ui.jsx — visual shell: topbar, hero, list, post view, footer.
- * Reads from registry + router via shell-core.
- */
-(function () {
-const { useState, useEffect, useMemo, useCallback } = React;
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import {
+  BlogContext, pickLocale, ReadingProgress, TOC,
+  getAllPosts, getAllTags, getPostBySlug, neighbors,
+} from './blog-components';
+import {
+  LANGS, THEMES, useHashRouter, useShellStrings, makeFormatDate, applyTheme,
+} from './shell-core';
 
 /* ---------- topbar ---------- */
+
 function Topbar({ lang, theme, onLang, onTheme, onHome, S }) {
   const [open, setOpen] = useState(false);
   const ref = React.useRef(null);
@@ -81,6 +85,7 @@ function Topbar({ lang, theme, onLang, onTheme, onHome, S }) {
 }
 
 /* ---------- index hero + list ---------- */
+
 function IndexView({ lang, t, theme, navigate, S, formatDate }) {
   const all = useMemo(() => getAllPosts(), []);
   const tags = useMemo(() => getAllTags(), []);
@@ -173,6 +178,7 @@ function PostCard({ post, lang, navigate, S, formatDate, featured }) {
 }
 
 /* ---------- post view ---------- */
+
 function PostView({ slug, lang, theme, navigate, S, formatDate, t }) {
   const post = getPostBySlug(slug);
   if (!post) return <NotFound S={S} navigate={navigate} />;
@@ -288,6 +294,7 @@ function NotFound({ S, navigate }) {
 }
 
 /* ---------- footer ---------- */
+
 function Footer({ lang, S }) {
   return (
     <footer className="b-footer">
@@ -306,9 +313,9 @@ function Footer({ lang, S }) {
 }
 
 /* ---------- root app ---------- */
-function App() {
+
+export default function App() {
   const router = useHashRouter();
-  // Lang/theme: query > localStorage > default
   const initialLang = router.query.lang || localStorage.getItem('blog.lang') || 'en';
   const initialTheme = router.query.theme || localStorage.getItem('blog.theme') || 'folio';
   const [lang, setLang] = useState(LANGS.some(l => l.code === initialLang) ? initialLang : 'en');
@@ -317,18 +324,15 @@ function App() {
   useEffect(() => { applyTheme(theme); localStorage.setItem('blog.theme', theme); }, [theme]);
   useEffect(() => { document.documentElement.lang = lang; localStorage.setItem('blog.lang', lang); }, [lang]);
 
-  // Sync URL ↔ state when query changes externally
   useEffect(() => {
     if (router.query.lang && router.query.lang !== lang) setLang(router.query.lang);
     if (router.query.theme && router.query.theme !== theme) setTheme(router.query.theme);
   }, [router.query.lang, router.query.theme]);
 
-  // When user changes lang/theme, reflect in URL (so deep-links work)
   const onLang = (code) => { setLang(code); router.setQuery({ lang: code }); };
   const onTheme = (id) => { setTheme(id); router.setQuery({ theme: id }); };
   const onHome = () => router.navigate('#/');
 
-  // Scroll to top on route change
   useEffect(() => { window.scrollTo({ top: 0, behavior: 'instant' in window ? 'instant' : 'auto' }); }, [router.route.name, router.route.slug]);
 
   const S = useShellStrings(lang);
@@ -345,6 +349,3 @@ function App() {
     </div>
   );
 }
-
-window.BlogApp = App;
-})();

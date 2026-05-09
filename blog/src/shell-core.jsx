@@ -1,16 +1,8 @@
-/* shell-core.jsx — hash router, i18n, theme persistence, registry helpers.
- * Stays small and free of UI; the shell renders by reading state this provides.
- */
-(function () {
-const { useState, useEffect, useMemo, useCallback } = React;
+import { useState, useEffect, useMemo, useCallback } from 'react';
 
 /* ---------- hash router ---------- */
-// Routes:
-//   #/                        — index
-//   #/post/<slug>             — post detail
-// Query (after `?`): lang, theme, tag
 
-function parseHash(hash) {
+export function parseHash(hash) {
   const raw = (hash || '').replace(/^#/, '') || '/';
   const [pathPart, queryPart = ''] = raw.split('?');
   const segs = pathPart.split('/').filter(Boolean);
@@ -24,7 +16,7 @@ function parseHash(hash) {
   return { route, query, raw };
 }
 
-function buildHash(route, query) {
+export function buildHash(route, query) {
   let path = '/';
   if (route.name === 'post') path = `/post/${route.slug}`;
   const qs = Object.entries(query)
@@ -34,7 +26,7 @@ function buildHash(route, query) {
   return `#${path}${qs ? '?' + qs : ''}`;
 }
 
-function useHashRouter() {
+export function useHashRouter() {
   const [state, setState] = useState(() => parseHash(location.hash));
   useEffect(() => {
     const onHash = () => setState(parseHash(location.hash));
@@ -43,7 +35,6 @@ function useHashRouter() {
   }, []);
   const navigate = useCallback((href) => {
     if (typeof href === 'string') {
-      // accept "#/path?…" or "/path?…"
       const h = href.startsWith('#') ? href : '#' + href;
       if (location.hash !== h) location.hash = h;
     } else {
@@ -62,12 +53,12 @@ function useHashRouter() {
 
 /* ---------- i18n / locale helpers ---------- */
 
-const LANGS = [
+export const LANGS = [
   { code: 'en', label: 'English', short: 'EN' },
   { code: 'zh', label: '中文', short: '中' },
 ];
 
-const SHELL_STRINGS = {
+export const SHELL_STRINGS = {
   en: {
     siteName: 'Blog Station',
     siteSub: 'A field guide',
@@ -122,11 +113,11 @@ const SHELL_STRINGS = {
   },
 };
 
-function useShellStrings(lang) {
+export function useShellStrings(lang) {
   return SHELL_STRINGS[lang] || SHELL_STRINGS.en;
 }
 
-function makeFormatDate(lang) {
+export function makeFormatDate(lang) {
   return (iso) => {
     if (!iso) return '';
     try {
@@ -138,7 +129,8 @@ function makeFormatDate(lang) {
 }
 
 /* ---------- theme persistence ---------- */
-const THEMES = [
+
+export const THEMES = [
   { id: 'folio',     label: { en: 'Folio',     zh: '文集' }, blurb: { en: 'Editorial · serif', zh: '编辑型 · 衬线' } },
   { id: 'console',   label: { en: 'Console',   zh: '终端' }, blurb: { en: 'Terminal · mono',  zh: '终端型 · 等宽' } },
   { id: 'atlas',     label: { en: 'Atlas',     zh: '图志' }, blurb: { en: 'Magazine · bold',  zh: '杂志型 · 粗体' } },
@@ -146,38 +138,7 @@ const THEMES = [
   { id: 'brutalist', label: { en: 'Brutalist', zh: '粗野' }, blurb: { en: 'Raw · mono',       zh: '原始型 · 等宽' } },
 ];
 
-function applyTheme(theme) {
+export function applyTheme(theme) {
   document.documentElement.setAttribute('data-theme', theme);
   document.documentElement.style.colorScheme = theme === 'console' ? 'dark' : 'light';
 }
-
-/* ---------- registry helpers ---------- */
-function getPostBySlug(slug) {
-  return (window.Blog?.byId || {})[slug] || null;
-}
-function getAllPosts() {
-  return [...(window.Blog?.posts || [])].sort((a, b) => {
-    const ad = a.meta?.publishedAt || '';
-    const bd = b.meta?.publishedAt || '';
-    return bd.localeCompare(ad);
-  });
-}
-function getAllTags() {
-  const set = new Set();
-  for (const p of getAllPosts()) (p.meta?.tags || []).forEach(t => set.add(t));
-  return Array.from(set);
-}
-function neighbors(slug) {
-  const posts = getAllPosts();
-  const i = posts.findIndex(p => p.id === slug);
-  if (i < 0) return { prev: null, next: null };
-  return { prev: posts[i + 1] || null, next: posts[i - 1] || null };
-}
-
-/* expose */
-Object.assign(window, {
-  parseHash, buildHash, useHashRouter,
-  LANGS, THEMES, SHELL_STRINGS, useShellStrings, makeFormatDate, applyTheme,
-  getPostBySlug, getAllPosts, getAllTags, neighbors,
-});
-})();

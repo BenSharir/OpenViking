@@ -1,15 +1,8 @@
-/* blog-components.jsx — primitives every post composes from.
- * Classes carry the visual contract; themes.css restyles them per theme.
- * Posts NEVER write theme-specific styling; they assemble these primitives.
- *
- * Wrapped in IIFE so React-hook destructures don't collide with other files.
- */
-(function () {
-const { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } = React;
+import React, { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 /* ---------- locale + context ---------- */
 
-function pickLocale(v, lang, fb = 'en') {
+export function pickLocale(v, lang, fb = 'en') {
   if (v == null) return '';
   if (typeof v === 'string' || typeof v === 'number') return v;
   if (Array.isArray(v)) return v;
@@ -19,7 +12,7 @@ function pickLocale(v, lang, fb = 'en') {
   return k ? v[k] : '';
 }
 
-const BlogContext = createContext({
+export const BlogContext = createContext({
   lang: 'en',
   theme: 'folio',
   fallbackLang: 'en',
@@ -29,18 +22,18 @@ const BlogContext = createContext({
   postSlug: null,
 });
 
-const useBlog = () => useContext(BlogContext);
-const useLang = () => useContext(BlogContext).lang;
-const useT = () => useContext(BlogContext).t;
-const useTheme = () => useContext(BlogContext).theme;
-const useFormatDate = () => useContext(BlogContext).formatDate;
+export const useBlog = () => useContext(BlogContext);
+export const useLang = () => useContext(BlogContext).lang;
+export const useT = () => useContext(BlogContext).t;
+export const useTheme = () => useContext(BlogContext).theme;
+export const useFormatDate = () => useContext(BlogContext).formatDate;
 
 /* ---------- ids + slugs ---------- */
 
-function slugify(text) {
+export function slugify(text) {
   return String(text || '')
     .toLowerCase()
-    .replace(/[^\w\u4e00-\u9fff\u00c0-\u017f\s-]/g, '')
+    .replace(/[^\w一-鿿À-ſ\s-]/g, '')
     .trim()
     .replace(/\s+/g, '-')
     .slice(0, 80) || 'h';
@@ -58,19 +51,19 @@ function flattenChildren(children) {
 
 /* ---------- structure ---------- */
 
-function Article({ children, className = '' }) {
+export function Article({ children, className = '' }) {
   return <article className={`b-article ${className}`}>{children}</article>;
 }
 
-function Section({ children, tone, className = '' }) {
+export function Section({ children, tone, className = '' }) {
   return <section className={`b-section ${tone ? `b-section--${tone}` : ''} ${className}`}>{children}</section>;
 }
 
-function Spacer({ h = 'md' }) {
+export function Spacer({ h = 'md' }) {
   return <div className={`b-spacer b-spacer--${h}`} aria-hidden="true" />;
 }
 
-function Hr({ ornament }) {
+export function Hr({ ornament }) {
   return <hr className={`b-hr ${ornament ? 'b-hr--ornament' : ''}`} />;
 }
 
@@ -87,31 +80,31 @@ function Heading({ level, children, id, eyebrow }) {
     </Tag>
   );
 }
-const H1 = (p) => <Heading {...p} level={1} />;
-const H2 = (p) => <Heading {...p} level={2} />;
-const H3 = (p) => <Heading {...p} level={3} />;
-const H4 = (p) => <Heading {...p} level={4} />;
+export const H1 = (p) => <Heading {...p} level={1} />;
+export const H2 = (p) => <Heading {...p} level={2} />;
+export const H3 = (p) => <Heading {...p} level={3} />;
+export const H4 = (p) => <Heading {...p} level={4} />;
 
 /* ---------- text ---------- */
 
-function P({ children, dropCap, className = '' }) {
+export function P({ children, dropCap, className = '' }) {
   return <p className={`b-p ${dropCap ? 'b-p--drop' : ''} ${className}`}>{children}</p>;
 }
-function Lead({ children }) {
+export function Lead({ children }) {
   return <p className="b-lead">{children}</p>;
 }
-function Small({ children }) {
+export function Small({ children }) {
   return <span className="b-small">{children}</span>;
 }
-const Strong = ({ children }) => <strong className="b-strong">{children}</strong>;
-const Em = ({ children }) => <em className="b-em">{children}</em>;
-const InlineCode = ({ children }) => <code className="b-code">{children}</code>;
-const Kbd = ({ children }) => <kbd className="b-kbd">{children}</kbd>;
-const Mark = ({ children }) => <mark className="b-mark">{children}</mark>;
+export const Strong = ({ children }) => <strong className="b-strong">{children}</strong>;
+export const Em = ({ children }) => <em className="b-em">{children}</em>;
+export const InlineCode = ({ children }) => <code className="b-code">{children}</code>;
+export const Kbd = ({ children }) => <kbd className="b-kbd">{children}</kbd>;
+export const Mark = ({ children }) => <mark className="b-mark">{children}</mark>;
 
 /* ---------- links ---------- */
 
-function A({ href = '#', children, external }) {
+export function A({ href = '#', children, external }) {
   const isExt = external ?? /^(https?:|mailto:)/.test(href);
   const { navigate } = useBlog();
   const onClick = isExt ? undefined : (e) => {
@@ -130,16 +123,15 @@ function A({ href = '#', children, external }) {
 
 /* ---------- lists ---------- */
 
-const Ul = ({ children, marker }) => <ul className={`b-ul ${marker ? `b-ul--${marker}` : ''}`}>{children}</ul>;
-const Ol = ({ children }) => <ol className="b-ol">{children}</ol>;
-const Li = ({ children }) => <li className="b-li">{children}</li>;
-const Dl = ({ children }) => <dl className="b-dl">{children}</dl>;
-const Dt = ({ children }) => <dt className="b-dt">{children}</dt>;
-const Dd = ({ children }) => <dd className="b-dd">{children}</dd>;
+export const Ul = ({ children, marker }) => <ul className={`b-ul ${marker ? `b-ul--${marker}` : ''}`}>{children}</ul>;
+export const Ol = ({ children }) => <ol className="b-ol">{children}</ol>;
+export const Li = ({ children }) => <li className="b-li">{children}</li>;
+export const Dl = ({ children }) => <dl className="b-dl">{children}</dl>;
+export const Dt = ({ children }) => <dt className="b-dt">{children}</dt>;
+export const Dd = ({ children }) => <dd className="b-dd">{children}</dd>;
 
 /* ---------- code blocks ---------- */
 
-// Tiny tokenizer — handles strings, comments, numbers, keywords for js/jsx/ts/tsx/css.
 const KW = {
   js: 'const let var function return if else for while do switch case break continue new class extends import export from default as async await try catch finally throw typeof instanceof in of yield void this super null undefined true false static get set'.split(' '),
   css: 'and or not only from to important inherit initial unset auto none'.split(' '),
@@ -180,11 +172,10 @@ function tokenize(src, lang = 'js') {
   return out;
 }
 
-function Pre({ children, lang = 'js', filename, lineNumbers = true }) {
+export function Pre({ children, lang = 'js', filename, lineNumbers = true }) {
   const src = typeof children === 'string' ? children : flattenChildren(children);
   const trimmed = src.replace(/^\n+|\n+$/g, '');
   const tokens = useMemo(() => tokenize(trimmed, lang), [trimmed, lang]);
-  // group tokens into lines for line-number rendering
   const lines = useMemo(() => {
     const ls = [[]];
     for (const t of tokens) {
@@ -215,7 +206,7 @@ function Pre({ children, lang = 'js', filename, lineNumbers = true }) {
 
 /* ---------- quotes ---------- */
 
-function Quote({ children, cite }) {
+export function Quote({ children, cite }) {
   return (
     <blockquote className="b-quote">
       <div className="b-quote__body">{children}</div>
@@ -224,14 +215,13 @@ function Quote({ children, cite }) {
   );
 }
 
-function Pull({ children, side = 'right' }) {
+export function Pull({ children, side = 'right' }) {
   return <aside className={`b-pull b-pull--${side}`}>{children}</aside>;
 }
 
 /* ---------- figures ---------- */
 
-function Figure({ src, alt, caption, credit, frame = 'plain', size = 'md' }) {
-  const isSvg = src && src.endsWith('.svg');
+export function Figure({ src, alt, caption, credit, frame = 'plain', size = 'md' }) {
   return (
     <figure className={`b-figure b-figure--${size} b-figure--${frame}`}>
       <div className="b-figure__media">
@@ -257,7 +247,7 @@ const CALLOUT_LABEL = {
   quote: { en: 'Quote',    zh: '引述' },
 };
 
-function Callout({ type = 'note', title, children }) {
+export function Callout({ type = 'note', title, children }) {
   const { lang } = useBlog();
   const label = title ?? pickLocale(CALLOUT_LABEL[type] || CALLOUT_LABEL.note, lang);
   return (
@@ -270,13 +260,13 @@ function Callout({ type = 'note', title, children }) {
 
 /* ---------- aside (margin note) ---------- */
 
-function Aside({ children }) {
+export function Aside({ children }) {
   return <aside className="b-aside">{children}</aside>;
 }
 
-/* ---------- table of contents (auto from rendered headings) ---------- */
+/* ---------- table of contents ---------- */
 
-function TOC({ minLevel = 2, maxLevel = 3, title }) {
+export function TOC({ minLevel = 2, maxLevel = 3, title }) {
   const { lang } = useBlog();
   const [items, setItems] = useState([]);
   const [active, setActive] = useState(null);
@@ -342,12 +332,12 @@ function TOC({ minLevel = 2, maxLevel = 3, title }) {
 
 /* ---------- columns / grid ---------- */
 
-const Cols = ({ children, count = 2 }) => <div className={`b-cols b-cols--${count}`}>{children}</div>;
-const Col = ({ children, span = 1 }) => <div className="b-col" style={{ '--col-span': span }}>{children}</div>;
+export const Cols = ({ children, count = 2 }) => <div className={`b-cols b-cols--${count}`}>{children}</div>;
+export const Col = ({ children, span = 1 }) => <div className="b-col" style={{ '--col-span': span }}>{children}</div>;
 
 /* ---------- tag ---------- */
 
-const Tag = ({ children, href, tone }) => {
+export const Tag = ({ children, href, tone }) => {
   const { navigate } = useBlog();
   const Cmp = href ? 'a' : 'span';
   return (
@@ -358,9 +348,9 @@ const Tag = ({ children, href, tone }) => {
   );
 };
 
-/* ---------- definition / data table ---------- */
+/* ---------- table ---------- */
 
-function Table({ headers, rows, caption }) {
+export function Table({ headers, rows, caption }) {
   return (
     <div className="b-table-wrap">
       <table className="b-table">
@@ -376,9 +366,9 @@ function Table({ headers, rows, caption }) {
   );
 }
 
-/* ---------- progress + reveal ---------- */
+/* ---------- progress ---------- */
 
-function ReadingProgress() {
+export function ReadingProgress() {
   const ref = useRef(null);
   useEffect(() => {
     const onScroll = () => {
@@ -397,27 +387,37 @@ function ReadingProgress() {
   return <div ref={ref} className="b-progress" aria-hidden="true" />;
 }
 
-/* ---------- registry helpers ---------- */
+/* ---------- post registry ---------- */
 
-window.Blog = window.Blog || {
-  posts: [],
-  byId: {},
-  register(post) {
-    if (!post || !post.id) return;
-    if (this.byId[post.id]) return;
-    this.byId[post.id] = post;
-    this.posts.push(post);
-  },
-};
+const registry = { posts: [], byId: {} };
 
-/* expose primitives globally for posts to consume */
-Object.assign(window, {
-  BlogContext, useBlog, useLang, useT, useTheme, useFormatDate, pickLocale, slugify,
-  Article, Section, Spacer, Hr,
-  H1, H2, H3, H4,
-  P, Lead, Small, Strong, Em, InlineCode, Kbd, Mark,
-  A, Ul, Ol, Li, Dl, Dt, Dd,
-  Pre, Quote, Pull, Figure, Callout, Aside, TOC,
-  Cols, Col, Tag, Table, ReadingProgress,
-});
-})();
+export function registerPost(post) {
+  if (!post || !post.id || registry.byId[post.id]) return;
+  registry.byId[post.id] = post;
+  registry.posts.push(post);
+}
+
+export function getPostBySlug(slug) {
+  return registry.byId[slug] || null;
+}
+
+export function getAllPosts() {
+  return [...registry.posts].sort((a, b) => {
+    const ad = a.meta?.publishedAt || '';
+    const bd = b.meta?.publishedAt || '';
+    return bd.localeCompare(ad);
+  });
+}
+
+export function getAllTags() {
+  const set = new Set();
+  for (const p of getAllPosts()) (p.meta?.tags || []).forEach(t => set.add(t));
+  return Array.from(set);
+}
+
+export function neighbors(slug) {
+  const posts = getAllPosts();
+  const i = posts.findIndex(p => p.id === slug);
+  if (i < 0) return { prev: null, next: null };
+  return { prev: posts[i + 1] || null, next: posts[i - 1] || null };
+}
