@@ -22,13 +22,13 @@ const OpenVikingContextDatabaseZh = () => (
       上下文工程 = 可靠的推理流程约束 + 完整的信息组织 + 有效的上下文推荐 + 全生命周期记忆 + 可跟踪的自进化学习。
     </Quote>
 
-    <H2>一、上下文工程为什么变成数据库问题</H2>
+    <H2>I. 上下文工程为什么变成数据库问题</H2>
     <ContextFrontHalfBlocks />
 
-    <H2>二、OpenViking 的设计理念与技术原理</H2>
+    <H2>II. OpenViking 的设计理念与技术原理</H2>
     <OpenVikingArchitectureBlocks />
 
-    <H2>三、从产品边界到团队落地</H2>
+    <H2>III. 从产品边界到团队落地</H2>
     <OpenVikingPracticeBlocks />
   </Article>
 );

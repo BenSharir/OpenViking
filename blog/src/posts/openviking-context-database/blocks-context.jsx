@@ -47,18 +47,6 @@ const resourceSections = [
       ['OpenClaw 最佳实践', '把长期记忆、技能和插件串起来，减少重复补充上下文。'],
     ],
   },
-  {
-    key: 'speakers',
-    label: '分享人',
-    title: '分享人覆盖 OpenViking、推荐与记忆三个方向',
-    copy: '原文列出的分享阵容也说明了这篇文章的视角：它不是单一工具介绍，而是把上下文数据库、智能推荐和记忆能力放在同一条技术路线里。',
-    bullets: [
-      ['盛茂家', 'Data-架构 架构师，OpenViking 项目发起人。'],
-      ['秦浩杰', 'OpenViking 项目主要成员。'],
-      ['杨舜尧', 'Viking 智能推荐团队成员。'],
-      ['陈俊文', 'Viking 记忆能力负责人。'],
-    ],
-  },
 ];
 
 const primitives = [
@@ -354,7 +342,7 @@ export function ContextStatusBackdrop() {
     <section className="ovb-section" aria-labelledby="context-status-title">
       <div className="ovb-kicker">why context engineering matters</div>
       <H3 id="context-status-title">上下文工程发展现状与痛点背景</H3>
-      <P dropCap>
+      <P>
         原文把上下文工程定义为从 LLM 诞生时就出现的系统化方法：把可读信息提供给生成式模型，用它干预输出。
         它脱胎于 Prompt Engineering，但随着任务变长、资料变多、Agent 开始调用工具和沉淀记忆，问题已经不再只是提示词怎么写。
       </P>

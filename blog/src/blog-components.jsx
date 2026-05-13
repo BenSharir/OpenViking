@@ -89,7 +89,14 @@ export const H4 = (p) => <Heading {...p} level={4} />;
 /* ---------- text ---------- */
 
 export function P({ children, dropCap, className = '' }) {
-  return <p className={`b-p ${dropCap ? 'b-p--drop' : ''} ${className}`}>{children}</p>;
+  const { lang } = useBlog();
+  const dropCapMode = dropCap === true ? 'auto' : dropCap;
+
+  const shouldDropCap =
+    dropCapMode === 'always' ||
+    ((dropCapMode === 'auto' || dropCapMode === 'lang') && lang === 'en');
+
+  return <p className={`b-p ${shouldDropCap ? 'b-p--drop' : ''} ${className}`}>{children}</p>;
 }
 export function Lead({ children }) {
   return <p className="b-lead">{children}</p>;

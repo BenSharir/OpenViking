@@ -42,7 +42,16 @@ button { font: inherit; color: inherit; }
 
 .b-strong { font-weight: 700; }
 .b-em { font-style: italic; }
-.b-mark { background: color-mix(in oklab, var(--th-accent) 25%, transparent); color: inherit; padding: 0 2px; }
+.b-mark {
+  color: var(--th-mark-color, var(--th-ink));
+  background-color: var(--th-mark-bg);
+  border: 1px solid var(--th-mark-border);
+  border-radius: 999px;
+  padding: 0.02em 0.45em 0.03em;
+  box-decoration-break: clone;
+  font-weight: 500;
+  vertical-align: baseline;
+}
 
 .b-code { font-family: var(--th-font-mono); font-size: 0.88em; padding: 2px 6px; background: var(--th-bg-2); border: 1px solid var(--th-line); border-radius: 4px; }
 .b-kbd { font-family: var(--th-font-mono); font-size: 0.82em; padding: 2px 8px; border: 1px solid var(--th-line); border-bottom-width: 2px; border-radius: 4px; background: var(--th-bg-2); }
@@ -315,6 +324,9 @@ a.b-tag:hover { color: var(--th-ink); border-color: var(--th-ink); }
   --th-measure: 720px;
   --th-tk-st: #6b4c3b;
   --th-tk-kw: #1B365D;
+  --th-mark-bg: color-mix(in oklab, #c1d7ff 58%, transparent);
+  --th-mark-color: #163255;
+  --th-mark-border: color-mix(in oklab, #1B365D 18%, transparent);
 }
 [data-theme="kami"] .b-lead { color: #5a554a; }
 [data-theme="kami"] .b-pre { background: #1a1a1a; color: #e8e4da; border-color: #1a1a1a; }
@@ -350,6 +362,9 @@ a.b-tag:hover { color: var(--th-ink); border-color: var(--th-ink); }
   --th-measure: 720px;
   --th-tk-st: #c9956b;
   --th-tk-kw: #7b9ec4;
+  --th-mark-bg: color-mix(in oklab, var(--th-accent) 18%, #1a1917);
+  --th-mark-color: #d9e7ff;
+  --th-mark-border: color-mix(in oklab, var(--th-accent) 34%, transparent);
 }
 [data-theme="washi"] .b-lead { color: #a9a49a; }
 [data-theme="washi"] .b-pre { background: #111110; color: #e8e4da; border-color: #2a2927; }

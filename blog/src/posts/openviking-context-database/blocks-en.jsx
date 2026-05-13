@@ -224,7 +224,7 @@ function PainAndFormulaSection() {
     <>
       <section>
         <H3 id="en-pain-points">Four Near-Term Pain Points</H3>
-        <div className="ovx-pain-grid">
+        <div className="ovx-pain-grid ovx-pain-grid--two">
           {pains.map((pain, index) => (
             <article className="ovx-pain-card" key={pain.title}>
               <div className="ovx-pain-card__index">pain {index + 1}</div>
@@ -266,7 +266,8 @@ function PainAndFormulaSection() {
         </div>
         <Callout type="tip" title="Positioning">
           <P>
-            OpenViking mainly provides <Mark>complete information organization</Mark>, and becomes the infrastructure beneath context recommendation and long-term memory.
+            OpenViking mainly provides <Mark>complete information organization</Mark>,
+            and serves as the infrastructure for <Mark>effective context recommendation</Mark> and <Mark>full-lifecycle memory</Mark>.
           </P>
         </Callout>
       </section>
@@ -509,13 +510,13 @@ ov observer vlm`}</Pre>
 export default function OpenVikingEnglishBlocks() {
   return (
     <>
-      <H2>1. Why Context Engineering Becomes a Database Problem</H2>
+      <H2>I. Why Context Engineering Becomes a Database Problem</H2>
       <EnglishContextBlocks />
 
-      <H2>2. OpenViking's Design Philosophy and Technical Model</H2>
+      <H2>II. OpenViking&apos;s Design Philosophy and Technical Model</H2>
       <EnglishArchitectureBlocks />
 
-      <H2>3. Product Boundaries and Team Adoption</H2>
+      <H2>III. Product Boundaries and Team Adoption</H2>
       <EnglishPracticeBlocks />
     </>
   );

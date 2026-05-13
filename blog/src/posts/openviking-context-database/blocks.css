@@ -272,6 +272,10 @@ table.ovx-matrix__table {
   margin: 28px 0;
 }
 
+.ovx-pain-grid--two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .ovx-pain-card {
   display: grid;
   gap: 10px;
