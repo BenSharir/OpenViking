@@ -518,6 +518,6 @@ export default {
     category: { en: 'Engineering', zh: '工程' },
     tags: ['agent', 'daemon', 'mcp', 'openviking'],
     languages: ['en', 'zh'],
-    authors: [{ name: 'Zayn', github: 'ZaynJarvis', role: { en: 'Engineer', zh: '工程师' } }],
+    authors: [{ name: 'zayn', github: 'ZaynJarvis', role: { en: 'Engineer', zh: '工程师' } }],
   },
 };
