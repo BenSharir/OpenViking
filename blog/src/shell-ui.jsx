@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   BlogContext, ExternalArrowIcon, pickLocale, ReadingProgress, TOC,
   getAllPosts, getAllTags, getPostBySlug, neighbors,
@@ -6,7 +6,7 @@ import {
 import {
   LANGS, THEME_LIGHT, THEME_DARK,
   useSiteRouter, useShellStrings, makeFormatDate, applyTheme, getInitialTheme, isDark,
-  buildPath, postPath,
+  buildPath, postPath, estimateReadingMinutes,
 } from './shell-core';
 
 /* ---------- topbar ---------- */
@@ -133,6 +133,7 @@ function PostCard({ post, lang, navigate, S, formatDate, featured }) {
   const m = post.meta;
   const title = pickLocale(m.title, lang);
   const excerpt = pickLocale(m.description, lang);
+  const readingTime = pickLocale(m.readingTime, lang);
   const cover = m.cardCover || m.cover;
   const author = (m.authors || [])[0];
   const href = postPath(post.id);
@@ -150,7 +151,7 @@ function PostCard({ post, lang, navigate, S, formatDate, featured }) {
       <div className="b-card__body">
         <div className="b-card__meta">
           <span>{formatDate(m.publishedAt)}</span>
-          {m.readingTime ? <span>{S.readingTime(m.readingTime)}</span> : null}
+          {readingTime ? <span>{S.readingTime(readingTime)}</span> : null}
           {m.category ? <span>{pickLocale(m.category, lang)}</span> : null}
         </div>
         <h2 className="b-card__title">{title}</h2>
@@ -181,9 +182,22 @@ export function PostView({ slug, lang, theme, navigate, S, formatDate, t }) {
   const post = getPostBySlug(slug);
   if (!post) return <NotFound S={S} navigate={navigate} />;
   const m = post.meta;
+  const bodyRef = useRef(null);
   const supported = m.languages || ['en'];
   const effectiveLang = supported.includes(lang) ? lang : (supported[0] || 'en');
   const langMissing = effectiveLang !== lang;
+  const fallbackReadingTime = pickLocale(m.readingTime, effectiveLang) || null;
+  const [readingTime, setReadingTime] = useState(fallbackReadingTime);
+
+  useEffect(() => {
+    setReadingTime(fallbackReadingTime);
+  }, [fallbackReadingTime, slug, effectiveLang]);
+
+  useEffect(() => {
+    const text = bodyRef.current?.innerText || '';
+    const next = estimateReadingMinutes(text, effectiveLang);
+    if (next) setReadingTime(next);
+  }, [slug, effectiveLang]);
 
   const Component = post.Component;
   const postS = useShellStrings(effectiveLang);
@@ -237,7 +251,7 @@ export function PostView({ slug, lang, theme, navigate, S, formatDate, t }) {
           <div className="b-post__times">
             <span><b>{S.publishedOn}</b> {formatDate(m.publishedAt)}</span>
             {m.updatedAt ? <span><b>{S.updatedOn}</b> {formatDate(m.updatedAt)}</span> : null}
-            {m.readingTime ? <span>{S.readingTime(m.readingTime)}</span> : null}
+            {readingTime ? <span>{S.readingTime(readingTime)}</span> : null}
           </div>
         </div>
         {langMissing ? (
@@ -253,7 +267,7 @@ export function PostView({ slug, lang, theme, navigate, S, formatDate, t }) {
           <aside className="b-post__sidebar">
             <TOC key={`${slug}:${effectiveLang}`} title={postS.contents} lang={effectiveLang} foldable={false} />
           </aside>
-          <div className="b-post__body">
+          <div className="b-post__body" ref={bodyRef}>
             <Component {...ctx} />
           </div>
         </div>

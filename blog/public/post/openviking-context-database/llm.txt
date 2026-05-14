@@ -205,11 +205,11 @@ ov status
 ov observer vlm
 ```
 
-With `--with-bot`, `ov chat` can use connected resources, skills, summaries, retrieval, and memory context. Public feedback flows through GitHub issues, discussions, and documentation updates.
+With `--with-bot`, `ov chat` can use connected resources, skills, summaries, retrieval, and memory context.
 
-## Takeaways and Roadmap
+## Core Judgments and Roadmap
 
-Takeaways:
+Core judgments:
 
 - Larger context corpora make retrieval quality and organization more important.
 - High-efficiency teams need a context database for full-domain information integration.

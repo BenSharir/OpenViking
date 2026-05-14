@@ -73,11 +73,6 @@ export function PracticeBlockStyle() {
       .ovp-matrix__nav button:last-child { border-bottom: 0; }
       .ovp-matrix__nav button:hover, .ovp-matrix__nav button.is-active { background: var(--th-bg); color: var(--th-ink); }
       .ovp-matrix__body { padding: 22px; min-height: 310px; }
-      .ovp-path { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin: 20px 0; }
-      .ovp-path__step { border: 1px solid var(--th-line); border-top: 3px solid var(--tone); border-radius: 6px; padding: 12px; background: color-mix(in oklab, var(--tone) 5%, transparent); min-height: 132px; }
-      .ovp-path__n { font-family: var(--th-font-mono); color: var(--th-mute); font-size: 11px; }
-      .ovp-path__title { font-weight: 700; margin: 6px 0 4px; line-height: 1.25; }
-      .ovp-path__copy { color: var(--th-mute); font-size: 14px; line-height: 1.45; margin: 0; }
       .ovp-flow { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 14px; align-items: stretch; margin: 24px 0; }
       .ovp-flow__rail { display: grid; gap: 8px; }
       .ovp-flow__rail button { border: 1px solid var(--th-line); border-radius: 6px; background: var(--th-bg); color: var(--th-mute); cursor: pointer; font-family: var(--th-font-mono); min-height: 46px; padding: 10px 12px; text-align: left; }
@@ -94,10 +89,9 @@ export function PracticeBlockStyle() {
       .ovp-compact-list { margin-top: 8px; }
       .ovp-compact-list .b-li { margin: 6px 0; }
       @media (max-width: 800px) {
-        .ovp-grid--2, .ovp-grid--3, .ovp-matrix, .ovp-path, .ovp-flow, .ovp-route, .ovp-stage-note { grid-template-columns: 1fr; }
+        .ovp-grid--2, .ovp-grid--3, .ovp-matrix, .ovp-flow, .ovp-route, .ovp-stage-note { grid-template-columns: 1fr; }
         .ovp-matrix__nav { display: flex; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--th-line); }
         .ovp-matrix__nav button { min-width: 168px; border-bottom: 0; border-right: 1px solid var(--th-line); }
-        .ovp-path__step { min-height: auto; }
       }
     `}</style>
   );
@@ -312,16 +306,6 @@ export function DocumentDecomposition() {
         ))}
       </div>
 
-      <div className="ovp-path" aria-label="长文档到上下文的路径">
-        {documentStages.map((stage, index) => (
-          <div className="ovp-path__step" key={stage.key} style={{ '--tone': stage.tone }}>
-            <div className="ovp-path__n">{String(index + 1).padStart(2, '0')}</div>
-            <div className="ovp-path__title">{stage.label}</div>
-            <p className="ovp-path__copy">{stage.output}</p>
-          </div>
-        ))}
-      </div>
-
       <Callout type="tip" title="阅读窗口策略">
         <P>
           拆解的目标很明确：<Strong> 可向量化</Strong>、<Strong>语义独立</Strong>、<Strong>少占窗口</Strong>。
@@ -516,8 +500,8 @@ ov add-memory ./2026-03-04/memory-2026-03-04.md`}</Pre>
 export function VikingBotAndCommunity() {
   return (
     <section className="ovp-section" id="vikingbot-community">
-      <div className="ovp-kicker">native bot and q&a</div>
-      <H3>VikingBot、提问环节和社区反馈</H3>
+      <div className="ovp-kicker">native bot</div>
+      <H3>VikingBot：用对话检查上下文能力</H3>
       <P>
         VikingBot 是基于 OpenViking 的内嵌智能体，用自然语言测试资料接入、检索、摘要和阅读路径。
       </P>
@@ -528,25 +512,11 @@ ov chat -m "提出你的问题"
 ov status
 ov observer vlm`}</Pre>
 
-      <Cols count={2}>
-        <Col>
-          <H4>演示 C：内嵌智能体探索</H4>
-          <P>
-            通过 <InlineCode>--with-bot</InlineCode> 启动服务后，
-            <InlineCode>ov chat</InlineCode> 可以直接使用 OpenViking 已接入的资料、技能、摘要和检索能力。
-          </P>
-        </Col>
-        <Col>
-          <H4>Q&A 和反馈入口</H4>
-          <div className="ovp-compact-list">
-            <Ul marker="check">
-              <Li>阅读代码、提 Issue 和问题反馈：<A href={OPENVIKING_REPO}>OpenViking GitHub</A>。</Li>
-              <Li>完整技术文档：<A href={OPENVIKING_DOCS}>OpenViking 文档站</A>。</Li>
-              <Li>反馈通过 GitHub issue、讨论和文档更新持续收集。</Li>
-            </Ul>
-          </div>
-        </Col>
-      </Cols>
+      <H4>演示 C：内嵌智能体探索</H4>
+      <P>
+        通过 <InlineCode>--with-bot</InlineCode> 启动服务后，
+        <InlineCode>ov chat</InlineCode> 可以直接使用 OpenViking 已接入的资料、技能、摘要和检索能力。
+      </P>
 
       <Callout type="tip" title="VikingBot 的定位">
         <P>
@@ -558,10 +528,10 @@ ov observer vlm`}</Pre>
 }
 
 const wrapSections = {
-  takeaways: {
+  judgments: {
     label: '核心观点',
     tone: '#4a8c5a',
-    title: '带走的五个判断',
+    title: '五个核心判断',
     body: (
       <Ul marker="check">
         <Li>上下文数据规模越大，检索效率越高，自动化上限越高。</Li>
@@ -604,14 +574,14 @@ const wrapSections = {
 
 const wrapNavItems = Object.entries(wrapSections).map(([key, item]) => ({ key, ...item }));
 
-export function CoreTakeawaysAndRoadmap() {
+export function CoreJudgmentsAndRoadmap() {
   const nav = useStackNav(wrapNavItems, 'ovp-wrap');
   const active = wrapNavItems.find(item => item.key === nav.activeKey) || wrapNavItems[0];
 
   return (
-    <section className="ovp-section" id="core-takeaways-roadmap">
+    <section className="ovp-section" id="core-judgments-roadmap">
       <div className="ovp-kicker">wrap up</div>
-      <H3>带走核心观点和后续规划</H3>
+      <H3>核心观点和后续规划</H3>
       <P>
         上下文数据库的价值会落到团队效率、标准、稳定性、多模态、记忆、技能检索和分布式能力上。
       </P>
@@ -712,7 +682,7 @@ export function OpenVikingPracticeBlocks() {
       <TeamAdoptionPlaybook />
       <OpenClawMemoryPractice />
       <VikingBotAndCommunity />
-      <CoreTakeawaysAndRoadmap />
+      <CoreJudgmentsAndRoadmap />
       <Hr ornament />
       <P>
         相关资源：<A href={OPENVIKING_REPO}>OpenViking GitHub</A>、

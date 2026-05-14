@@ -13,7 +13,7 @@ const resourceSections = [
     key: 'resources',
     label: '资源入口',
     title: '把代码、文档和实践入口放在同一处',
-    copy: 'OpenViking 已提供开源代码、技术文档、社区反馈入口和 OpenClaw 集成指南。读者可以直接查看实现、接口和使用路径。',
+    copy: 'OpenViking 已提供开源代码、技术文档、社区讨论和 OpenClaw 集成指南。读者可以直接查看实现、接口和使用路径。',
     bullets: [
       ['阅读代码和提 Issue', <A href={GITHUB_URL}>volcengine/OpenViking</A>],
       ['技术文档站', <A href={DOCS_URL}>docs.openviking.ai</A>],
@@ -268,7 +268,7 @@ export function ContextBlockStyles() {
       .ovb-stat :is(h3, h4) { margin: 8px 0 6px; font-size: 17px; line-height: 1.25; }
       .ovb-stat p { margin: 0; color: var(--th-mute); font-size: 14px; line-height: 1.5; }
       .ovb-stat-label { font-family: var(--th-font-mono); font-size: 11px; color: var(--th-mute); text-transform: uppercase; }
-      .ovb-matrix-title { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+      .ovb-matrix-title { display: grid; gap: 8px; align-items: start; margin-bottom: 8px; }
       .ovb-matrix-title :is(h3, h4) { margin: 0; font-size: 25px; line-height: 1.2; }
       .ovb-primitive-card { scroll-margin-top: 132px; }
       .ovb-mini-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }
@@ -522,7 +522,7 @@ export function ContextFormulaDeepDive() {
                   <P>{term.openviking}</P>
                 </div>
                 <div>
-                  <div className="ovb-mini-label">读者应该带走的问题</div>
+                  <div className="ovb-mini-label">需要判断的问题</div>
                   <P>
                     当前团队的 Agent 是靠人临时塞资料，还是已经有一层可查询、可更新、可追踪的上下文基础设施？
                   </P>

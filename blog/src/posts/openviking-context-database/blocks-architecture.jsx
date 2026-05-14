@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
-  P, H3, H4, Pre, Pull, Callout, Hr,
+  P, H3, H4, Pre, Callout,
   Li, Ul, Table, InlineCode, Strong,
 } from '../../blog-components';
 
@@ -285,20 +285,15 @@ function ArchitectureBlockStyle() {
     <style>{`
       .ovarch { margin: 34px 0; }
       .ovarch-kicker { font-family: var(--th-font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--th-mute); margin-bottom: 10px; }
-      .ovarch-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 20px 0; }
-      .ovarch-card { border: 1px solid var(--th-line); border-top: 3px solid var(--tone); border-radius: 6px; padding: 14px; min-height: 230px; background: color-mix(in oklab, var(--th-bg-2) 72%, transparent); }
-      .ovarch-card__name { display: flex; align-items: center; gap: 8px; font-family: var(--th-font-display); font-size: 18px; line-height: 1.2; margin-bottom: 8px; }
-      .ovarch-card__name .b-h4 { margin: 0; font: inherit; line-height: inherit; }
-      .ovarch-card__dot { width: 8px; height: 8px; border-radius: 999px; background: var(--tone); flex: 0 0 auto; }
-      .ovarch-card__short { font-weight: 700; font-size: 14px; line-height: 1.35; margin-bottom: 10px; }
-      .ovarch-card p { margin: 8px 0 0; font-size: 14px; line-height: 1.5; color: var(--th-mute); }
-      .ovarch-lab { border: 1px solid var(--th-line); border-radius: 6px; overflow: hidden; margin: 24px 0; background: var(--th-bg); }
-      .ovarch-tabs { display: flex; flex-wrap: wrap; gap: 0; border-bottom: 1px solid var(--th-line); background: var(--th-bg-2); }
+      .ovarch-lab { border: 1px solid var(--th-line); border-radius: 6px; margin: 24px 0; background: var(--th-bg); max-height: min(520px, 72vh); overflow-y: auto; overscroll-behavior: contain; }
+      .ovarch-tabs { position: sticky; top: 0; z-index: 3; display: flex; flex-wrap: wrap; gap: 0; border-bottom: 1px solid var(--th-line); background: color-mix(in oklab, var(--th-bg-2) 94%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
       .ovarch-tabs button { border: 0; border-right: 1px solid var(--th-line); background: transparent; color: var(--th-mute); padding: 11px 13px; cursor: pointer; font-family: var(--th-font-mono); font-size: 12px; line-height: 1; }
       .ovarch-tabs button:hover, .ovarch-tabs button.is-active { background: var(--th-bg); color: var(--th-ink); }
-      .ovarch-section-list { display: grid; gap: 16px; padding: 18px; }
-      .ovarch-lab__body { padding: 20px; display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(260px, 0.95fr); gap: 24px; align-items: start; }
-      .ovarch-lab__body.is-active, .ovarch-principle.is-active, .ovarch-evolution__body.is-active, .ovarch-cli__section.is-active { border-color: var(--th-ink); box-shadow: 0 0 0 1px var(--th-ink) inset; }
+      .ovarch-section-list { display: grid; gap: 0; }
+      .ovarch-lab__body { border-bottom: 1px solid var(--th-line); padding: 20px; display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(260px, 0.95fr); gap: 24px; align-items: start; scroll-margin-top: 58px; }
+      .ovarch-lab__body:last-child { border-bottom: 0; }
+      .ovarch-lab__body.is-active { box-shadow: inset 3px 0 0 var(--th-accent); }
+      .ovarch-principle.is-active, .ovarch-cli__section.is-active { border-color: var(--th-ink); box-shadow: 0 0 0 1px var(--th-ink) inset; }
       .ovarch-rank { display: grid; gap: 11px; margin-top: 14px; }
       .ovarch-rank__row { display: grid; grid-template-columns: 128px minmax(0, 1fr) 36px; gap: 10px; align-items: center; font-size: 14px; }
       .ovarch-rank__label { font-weight: 700; word-break: break-word; }
@@ -306,13 +301,6 @@ function ArchitectureBlockStyle() {
       .ovarch-rank__fill { width: calc(var(--score) * 1%); height: 100%; background: var(--tone); }
       .ovarch-lab__note { border-left: 3px solid var(--th-accent); padding: 12px 14px; background: color-mix(in oklab, var(--th-accent) 8%, transparent); color: var(--th-mute); font-size: 14px; line-height: 1.55; }
       .ovarch-anchor { scroll-margin-top: 96px; }
-      .ovarch-evolution { border: 1px solid var(--th-line); border-radius: 6px; overflow: hidden; margin: 22px 0; background: var(--th-bg-2); }
-      .ovarch-evolution__rail { display: flex; overflow-x: auto; background: var(--th-bg-2); border-bottom: 1px solid var(--th-line); }
-      .ovarch-evolution__rail button { flex: 1 0 120px; border: 0; border-right: 1px solid var(--th-line); background: transparent; color: var(--th-mute); text-align: left; padding: 13px 14px; cursor: pointer; font-family: var(--th-font-mono); font-size: 12px; }
-      .ovarch-evolution__rail button:last-child { border-right: 0; }
-      .ovarch-evolution__rail button:hover, .ovarch-evolution__rail button.is-active { background: var(--th-bg); color: var(--th-ink); }
-      .ovarch-evolution__list { display: grid; gap: 14px; padding: 18px; }
-      .ovarch-evolution__body { border: 1px solid var(--th-line); border-radius: 6px; padding: 18px; background: var(--th-bg); }
       .ovarch-meta { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 16px; }
       .ovarch-meta span { border: 1px solid var(--th-line); border-radius: 999px; padding: 5px 10px; font-family: var(--th-font-mono); font-size: 12px; color: var(--th-mute); }
       .ovarch-principles { display: grid; gap: 14px; margin: 24px 0; }
@@ -343,8 +331,8 @@ function ArchitectureBlockStyle() {
       .ovarch-flow__title .b-h4 { margin: 0; font: inherit; line-height: inherit; }
       .ovarch-flow__copy { margin: 0; color: var(--th-mute); font-size: 14px; line-height: 1.45; }
       @media (max-width: 840px) {
-        .ovarch-grid, .ovarch-lab__body, .ovarch-principle__grid, .ovarch-flow { grid-template-columns: 1fr; }
-        .ovarch-card, .ovarch-flow__step { min-height: auto; }
+        .ovarch-lab__body, .ovarch-principle__grid, .ovarch-flow { grid-template-columns: 1fr; }
+        .ovarch-flow__step { min-height: auto; }
       }
     `}</style>
   );
@@ -374,6 +362,17 @@ function jumpTo(id, setActive, key) {
   document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
+function activeRankingFromScroll(root, setActive) {
+  if (!root) return;
+  const marker = root.scrollTop + 72;
+  let current = rankings[0]?.key || '';
+  for (const item of rankings) {
+    const el = root.querySelector(`#ovarch-ranking-${item.key}`);
+    if (el && el.offsetTop <= marker) current = item.key;
+  }
+  if (current) setActive(current);
+}
+
 export function InformationTopology() {
   return (
     <section className="ovarch">
@@ -384,31 +383,29 @@ export function InformationTopology() {
         上下文来自代码、文档、图片、会议和对话，不能只按对象属性存。
         OpenViking 先用语义索引找到入口，再用目录、元信息和关系支持 Agent 探索。
       </P>
-      <div className="ovarch-grid">
-        {paradigms.map(item => (
-          <article className="ovarch-card" key={item.key} style={{ '--tone': item.tone }}>
-            <div className="ovarch-card__name">
-              <span className="ovarch-card__dot" />
-              <H4 toc={false}>{item.name}</H4>
-            </div>
-            <div className="ovarch-card__short">{item.short}</div>
-            <p>{item.shape}</p>
-            <p><Strong>优势：</Strong>{item.strength}</p>
-            <p><Strong>限制：</Strong>{item.limit}</p>
-          </article>
-        ))}
-      </div>
-      <Callout type="note" title="OpenViking 的组合判断">
-        <P>
-          向量索引负责找入口，文件系统负责可读路径，表格负责确定筛选，关系表达负责跳转和发现。
-        </P>
-      </Callout>
+      <Table
+        headers={['组织形态', '表达方式', '优势', '限制']}
+        rows={paradigms.map(item => [
+          <Strong>{item.name}</Strong>,
+          item.shape,
+          item.strength,
+          item.limit,
+        ])}
+      />
     </section>
   );
 }
 
 export function ParadigmRankingLab() {
   const [activeKey, setActiveKey] = useState('semantic');
+  const labRef = useRef(null);
+
+  const jumpToRanking = (key) => {
+    setActiveKey(key);
+    const root = labRef.current;
+    const el = root?.querySelector(`#ovarch-ranking-${key}`);
+    if (root && el) root.scrollTo({ top: Math.max(el.offsetTop - 58, 0), behavior: 'smooth' });
+  };
 
   return (
     <section className="ovarch">
@@ -419,7 +416,7 @@ export function ParadigmRankingLab() {
         向量、图、文件系统和表格各有优势。下面的排序表达 OpenViking 的设计取舍，不作为性能基准：
         用向量找入口，用文件系统给 Agent 读，用有限 Schema 和关系补齐治理。
       </P>
-      <div className="ovarch-lab">
+      <div className="ovarch-lab" ref={labRef} onScroll={() => activeRankingFromScroll(labRef.current, setActiveKey)}>
         <div className="ovarch-tabs" aria-label="信息组织维度">
           {rankings.map(item => (
             <button
@@ -427,7 +424,7 @@ export function ParadigmRankingLab() {
               key={item.key}
               className={activeKey === item.key ? 'is-active' : ''}
               aria-pressed={activeKey === item.key}
-              onClick={() => jumpTo(`ovarch-ranking-${item.key}`, setActiveKey, item.key)}
+              onClick={() => jumpToRanking(item.key)}
             >
               {item.label}
             </button>
@@ -447,27 +444,20 @@ export function ParadigmRankingLab() {
               </div>
               <div className="ovarch-lab__note">
                 <Strong>解读：</Strong>{item.note}
-                <Hr />
                 <P>
-                  核心折中是：底层用向量覆盖语义和模态，对外用文件系统降低 Agent 学习成本，
-                  再用有限 Schema、URI、relations 和超链接补齐治理与关系。
+                  OpenViking 的折中是：底层用向量覆盖语义和模态，对外用文件系统降低 Agent 学习成本，
+                  再用有限 Schema、URI、relations 和超链接补齐治理。
                 </P>
               </div>
             </section>
           ))}
         </div>
       </div>
-      <Table
-        headers={['维度', '排序结果']}
-        rows={rankings.map(item => [item.label, item.order.join(' > ')])}
-      />
     </section>
   );
 }
 
 export function VikingDbEvolution() {
-  const [activeKey, setActiveKey] = useState('vector');
-
   return (
     <section className="ovarch">
       <ArchitectureBlockStyle />
@@ -477,45 +467,13 @@ export function VikingDbEvolution() {
         OpenViking 继承 VikingDB 在语义检索、标量过滤、图谱探索和文件系统语义上的积累，
         并把这些能力收束成 Agent 可用的数据接口。
       </P>
-      <div className="ovarch-evolution">
-        <div className="ovarch-evolution__rail" aria-label="VikingDB 演进阶段">
-          {evolution.map(item => (
-            <button
-              type="button"
-              key={item.key}
-              className={activeKey === item.key ? 'is-active' : ''}
-              aria-pressed={activeKey === item.key}
-              onClick={() => jumpTo(`ovarch-evolution-${item.key}`, setActiveKey, item.key)}
-            >
-              {item.name}
-            </button>
-          ))}
-        </div>
-        <div className="ovarch-evolution__list">
-          {evolution.map(item => (
-            <section
-              id={`ovarch-evolution-${item.key}`}
-              className={`ovarch-evolution__body ovarch-anchor ${activeKey === item.key ? 'is-active' : ''}`}
-              key={item.key}
-            >
-              <div className="ovarch-kicker">organization paradigm</div>
-              <H4>{item.name}</H4>
-              <div className="ovarch-meta">
-                <span>{item.years}</span>
-                <span>{item.value}</span>
-              </div>
-              <P>{item.capability}</P>
-              <Pull side="left">
-                关键是把底层组织能力变成 Agent 能学会的接口。
-              </Pull>
-            </section>
-          ))}
-          </div>
-      </div>
       <Table
         headers={['组织范式', '价值', '能力介绍', '年代']}
         rows={evolution.map(item => [item.name, item.value, item.capability, item.years])}
       />
+      <Callout type="note" title="设计收束">
+        <P>这些底层能力最终要变成 Agent 能学会、能组合、能验证的数据接口。</P>
+      </Callout>
     </section>
   );
 }

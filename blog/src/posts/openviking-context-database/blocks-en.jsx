@@ -238,6 +238,8 @@ function EnglishLocalNavStyle() {
     <style>{`
       .ovx-local-tabs { margin: 30px 0 18px; padding: 8px 0; border-top: 1px solid var(--th-line); border-bottom: 1px solid var(--th-line); background: color-mix(in oklab, var(--th-bg) 94%, transparent); }
       .ovx-local-tabs__label { margin-bottom: 6px; color: var(--th-mute); font-family: var(--th-font-mono); font-size: 11px; letter-spacing: 0.12em; line-height: 1.4; text-transform: uppercase; }
+      .ovx-ranking-widget { border: 1px solid var(--th-line); border-radius: 6px; max-height: min(460px, 68vh); overflow-y: auto; overscroll-behavior: contain; margin: 22px 0; background: var(--th-bg); }
+      .ovx-ranking-widget .b-table-wrap { margin: 0; border: 0; border-radius: 0; }
       @media (max-width: 760px) {
         .ovx-local-tabs { margin: 24px 0 14px; padding: 6px 0; }
         .ovx-local-tabs__label { margin-bottom: 4px; }
@@ -392,36 +394,33 @@ export function EnglishArchitectureBlocks() {
           The design starts from a simple question: is information organization the essence of information retrieval?
           For structured business entities, scalar fields and schemas are often enough. Context is messier. It may be code, docs, images, meetings, conversations, or links.
         </P>
-        <div className="ovx-compare-grid ovx-compare-grid--three">
-          {paradigms.map(([name, strength, limit]) => (
-            <article className="ovx-compare-card" key={name}>
-              <div className="ovx-compare-card__label">{name}</div>
-              <h4 className="ovx-compare-card__title">{strength}</h4>
-              <p className="ovx-compare-card__body">{limit}</p>
-            </article>
-          ))}
-        </div>
-        <Callout type="note" title="OpenViking's combination">
-          <P>
-            Vector search helps agents find semantically relevant material. File-system structure helps them navigate. Metadata and relations add governance and discovery without turning the whole product into a graph modeling exercise.
-          </P>
-        </Callout>
+        <Table
+          headers={['Organization form', 'Strength', 'Limit']}
+          rows={paradigms}
+        />
       </section>
 
       <section>
-        <H3 id="en-ranking-lab">Paradigm Ranking: There Is No Silver Bullet</H3>
+        <H3 id="en-ranking-lab">Paradigm Ranking: Tradeoffs by Dimension</H3>
         <P>
-          Vector indexes, graph, file-system organization, and table-style metadata each solve a different part of information organization. The point is not to pick one winner. The point is to combine their strengths for agent work.
+          Vector indexes, graph, file-system organization, and table-style metadata each solve a different part of information organization.
+          OpenViking combines their strengths for agent work.
         </P>
-        <Table
-          headers={['Dimension', 'Best fit', 'OpenViking implication']}
-          rows={[
-            ['Semantic matching', 'Vector index', 'Use vectors as the primary entry point for unstructured context.'],
-            ['Hierarchy and traversal', 'File system', 'Expose a path-based interface agents already understand.'],
-            ['Filtering and governance', 'Table metadata', 'Use limited schemas for owner, type, permission, time, and source.'],
-            ['Relationship discovery', 'Graph', 'Add relations where they are useful, but keep modeling cost low.'],
-          ]}
-        />
+        <div className="ovx-ranking-widget">
+          <Table
+            headers={['Dimension', 'Best fit', 'OpenViking implication']}
+            rows={[
+              ['Semantic matching', 'Vector index', 'Use vectors as the primary entry point for unstructured context.'],
+              ['Scale adaptation', 'Vector index / table metadata', 'Lean on mature indexes for large resource sets.'],
+              ['Agent adaptation', 'Vector index / file system', 'Find semantically, then expose paths agents can navigate.'],
+              ['Automated modeling', 'Vector index', 'Avoid forcing users to model every resource before ingestion.'],
+              ['Modality coverage', 'Vector index / file system', 'Accept many inputs, then turn them into readable context units.'],
+              ['Index and query efficiency', 'Vector index / table metadata', 'Combine semantic retrieval with deterministic filters.'],
+              ['Filtering and governance', 'Table metadata', 'Use limited schemas for owner, type, permission, time, and source.'],
+              ['Relationship discovery', 'Graph', 'Add relations where useful while keeping modeling cost low.'],
+            ]}
+          />
+        </div>
       </section>
 
       <section>
@@ -429,20 +428,15 @@ export function EnglishArchitectureBlocks() {
         <P>
           OpenViking is not designed from a blank page. It grows out of VikingDB's experience with semantic retrieval, table-like metadata, graph exploration, and file-system-like organization.
         </P>
-        <div className="ovx-roadmap ovx-roadmap--rail">
-          {[
-            ['2023', 'Vector search', 'Large-scale semantic retrieval becomes the foundation.'],
-            ['2024', 'Table and sparse retrieval', 'Filtering, keyword signals, and metadata become more important.'],
-            ['2025', 'Graph and file-system semantics', 'Relations and navigable structures become useful for agents.'],
-            ['Now', 'Context database', 'Expose these capabilities as an agent-friendly data interface.'],
-          ].map(([date, title, copy]) => (
-            <div className="ovx-roadmap__phase" key={title}>
-              <div className="ovx-roadmap__date">{date}</div>
-              <div className="ovx-roadmap__title">{title}</div>
-              <p className="ovx-roadmap__copy">{copy}</p>
-            </div>
-          ))}
-        </div>
+        <Table
+          headers={['Period', 'Organization form', 'Capability']}
+          rows={[
+            ['2019-2025', 'Vector search', 'Large-scale semantic retrieval becomes the foundation.'],
+            ['2021-2024', 'Table and sparse retrieval', 'Filtering, keyword signals, and metadata become more important.'],
+            ['2023-2024', 'Graph exploration', 'Relations help explain how context items connect.'],
+            ['2024-2025', 'File-system semantics', 'Navigable structures become useful for agents.'],
+          ]}
+        />
       </section>
 
       <section>
@@ -480,7 +474,7 @@ export function EnglishPracticeBlocks() {
   return (
     <>
       <Lead>
-        Practice focuses on product boundaries, long documents, team adoption, OpenClaw memory, VikingBot, takeaways, and the roadmap.
+        Practice focuses on product boundaries, long documents, team adoption, OpenClaw memory, VikingBot, core judgments, and the roadmap.
       </Lead>
 
       <section>
@@ -509,15 +503,6 @@ export function EnglishPracticeBlocks() {
         <P>
           OpenViking does not force a long document to stay as one file. It decomposes, reorganizes, and summarizes it for staged reading.
         </P>
-        <div className="ovx-loop">
-          {documentStages.map(({ n, title, copy }) => (
-            <div className="ovx-loop__step" key={title}>
-              <div className="ovx-loop__n">{n}</div>
-              <div className="ovx-loop__title">{title}</div>
-              <p className="ovx-loop__copy">{copy}</p>
-            </div>
-          ))}
-        </div>
         <Table
           headers={['Stage', 'Output shape', 'Agent action']}
           rows={documentStages.map(stage => [stage.title, stage.output, stage.action])}
@@ -601,7 +586,7 @@ ov add-memory ./2026-03-04/memory-2026-03-04.md`}</Pre>
       </section>
 
       <section>
-        <H3 id="en-vikingbot">Demo C: VikingBot and Feedback Loop</H3>
+        <H3 id="en-vikingbot">Demo C: VikingBot</H3>
         <P>
           VikingBot is a native agent interface for testing ingestion, retrieval, summaries, and reading paths.
         </P>
@@ -609,26 +594,14 @@ ov add-memory ./2026-03-04/memory-2026-03-04.md`}</Pre>
 ov chat -m "Ask your question"
 ov status
 ov observer vlm`}</Pre>
-        <Cols count={2}>
-          <Col>
-            <H4>Native agent exploration</H4>
-            <P>
-              With <code>--with-bot</code>, <code>ov chat</code> can use connected resources, skills, summaries, retrieval, and memory context.
-            </P>
-          </Col>
-          <Col>
-            <H4>Feedback path</H4>
-            <Ul marker="check">
-              <Li>Use GitHub issues and discussions for questions, bugs, and product feedback.</Li>
-              <Li>Use the technical docs for installation, deployment, and implementation detail.</Li>
-              <Li>Use VikingBot to check ingestion, retrieval, summaries, and reading paths.</Li>
-            </Ul>
-          </Col>
-        </Cols>
+        <H4>Native agent exploration</H4>
+        <P>
+          With <code>--with-bot</code>, <code>ov chat</code> can use connected resources, skills, summaries, retrieval, and memory context.
+        </P>
       </section>
 
       <section>
-        <H3 id="en-takeaways">Takeaways and Roadmap</H3>
+        <H3 id="en-core-judgments">Core Judgments and Roadmap</H3>
         <Ul marker="check">
           <Li>The larger the context corpus, the more important retrieval quality and organization become.</Li>
           <Li>Every high-efficiency team should have its own context database for full-domain information integration.</Li>

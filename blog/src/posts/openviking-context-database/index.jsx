@@ -64,7 +64,7 @@ export default {
     cardCover: '/assets/covers/openviking-context-database-card.png',
     publishedAt: '2026-03-10',
     updatedAt: '2026-05-14',
-    readingTime: 28,
+    readingTime: { zh: 24, en: 12 },
     category: { zh: '上下文工程', en: 'Context Engineering' },
     tags: ['openviking', 'context', 'agent'],
     languages: ['en', 'zh'],

@@ -185,6 +185,22 @@ export function makeFormatDate(lang) {
   };
 }
 
+export function estimateReadingMinutes(text = '', lang = 'en') {
+  const compact = String(text)
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!compact) return null;
+
+  const cjkChars = (compact.match(/[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/g) || []).length;
+  const latinText = compact.replace(/[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/g, ' ');
+  const latinWords = (latinText.match(/[A-Za-z0-9][A-Za-z0-9_'/-]*/g) || []).length;
+  const cjkRate = lang === 'zh' ? 500 : 560;
+  const latinRate = 230;
+  const minutes = (cjkChars / cjkRate) + (latinWords / latinRate);
+  return Math.max(1, Math.ceil(minutes));
+}
+
 /* ---------- theme: light (纸) / dark (和纸) ---------- */
 
 export const THEME_LIGHT = 'kami';

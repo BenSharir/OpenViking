@@ -22,6 +22,7 @@ For blog-wide mobile/PWA polish, also read
 8. Public Lark-derived posts need a publication-safety pass across every surface: zh HTML, en HTML, post `llm.txt`, generated page metadata, and site `/llms.txt`. Do not expose private Lark wiki URLs, internal domains, internal proxies, employee/speaker rosters, private home paths, or internal deployment/community instructions unless the user explicitly says that material is public. Prefer GitHub, `docs.openviking.ai`, and public discussion links for follow-up detail.
 9. Keep zh, en, and `llm.txt` content aligned. The agent-readable markdown can be plainer than the human page, but it must not contain extra internal details or source-only sections that the public zh/en article intentionally removed. If the human post uses a public-facing summary table, make `llm.txt` use the same public boundary.
 10. When converting a private or source document into a public blog post, write the HTML as the final article, not as commentary about the source. Readers cannot see the original document. Draft Chinese first for direct public prose, remove roundabout framing such as "the point is not..." review notes, then align English and `llm.txt` to that public version.
+11. Reading time should be estimated from rendered article text using Chinese character count and English word count. Treat `meta.readingTime` as a fallback for SSR/index cards, not as the source of truth for the post page.
 
 ---
 
@@ -121,7 +122,7 @@ Every field is required unless marked optional. Strings that face the reader **m
 | `cover` | `string` | yes | Path to an SVG/PNG. Aspect ratio 16:9 or 16:7 is best. |
 | `publishedAt` | `'YYYY-MM-DD'` | yes | ISO date. Drives ordering. |
 | `updatedAt` | `'YYYY-MM-DD'` | optional | Render only when meaningfully different from `publishedAt`. |
-| `readingTime` | `number` (minutes) | yes | Round to nearest minute. ~250 words/min for prose, less for reference. |
+| `readingTime` | `number` or `{ en, zh }` (minutes) | optional | Fallback for SSR/index cards. Prefer locale values for bilingual posts. The post page estimates reading time from rendered text by language. |
 | `category` | `{ en, zh, ... }` | optional | Single short label, e.g. `{ en: 'Engineering', zh: '工程' }`. |
 | `tags` | `string[]` | yes | Lowercase, ASCII, kebab-case. Reuse existing tags before inventing one. |
 | `languages` | `string[]` | yes | Locale codes the post supports, e.g. `['en', 'zh']`. The shell shows a fallback notice when the reader's lang is missing. |
