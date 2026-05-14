@@ -1,4 +1,4 @@
-# CLAUDE.md — Authoring guide for OpenViking Blog posts
+# design.md — Authoring guide for OpenViking Blog posts
 
 You are an agent adding a post to the **OpenViking Blog**. This document is the contract.
 
@@ -23,6 +23,8 @@ For blog-wide mobile/PWA polish, also read
 9. Keep zh, en, and `llm.txt` content aligned. The agent-readable markdown can be plainer than the human page, but it must not contain extra internal details or source-only sections that the public zh/en article intentionally removed. If the human post uses a public-facing summary table, make `llm.txt` use the same public boundary.
 10. When converting a private or source document into a public blog post, write the HTML as the final article, not as commentary about the source. Readers cannot see the original document. Draft Chinese first for direct public prose, remove roundabout framing such as "the point is not..." review notes, then align English and `llm.txt` to that public version.
 11. Reading time should be estimated from rendered article text using Chinese character count and English word count. Treat `meta.readingTime` as a fallback for SSR/index cards, not as the source of truth for the post page.
+12. Use presentation patterns only when they reduce reading load. Put chip labels on their own line before the title; use tables for comparison matrices; avoid showing the same stages twice as cards plus a table; put dense charts in a bounded, independently scrollable widget with a sticky internal control; do not repeat the same pull quote in every item.
+13. Avoid direct English calques in Chinese headings. Prefer `核心观点`, `五个判断`, or a concrete noun phrase over `带走...`. Remove generic Q&A / feedback link blocks unless they add new reader value.
 
 ---
 
@@ -107,7 +109,7 @@ Write bilingual content in this order:
 2. **Write the English version first.** Get the structure, examples, and technical content right. For long architecture posts, make the first pass a coherent frame, not the final density target.
 3. **Run a second filling pass.** Use parallel agents when allowed: one for source/content gaps, one for frontend rendering blocks, and one for terminology/translation QA. Integrate their work into one coherent article instead of pasting isolated panels.
 4. **Translate to Chinese after the structure stabilizes.** Produce a faithful translation, including custom component labels, local nav, tables, captions, and interactive states.
-5. **Optimize the Chinese version for natural tone.** Follow the [shuorenhua](https://github.com/MrGeDiao/shuorenhua) guidelines: no AI filler, no template openers/closers ("In this article we will explore..."), no empty adjectives. Write like you're explaining to a colleague, not writing a press release.
+5. **Optimize the Chinese version for natural tone.** Follow the [shuorenhua](https://github.com/MrGeDiao/shuorenhua) guidelines: no AI filler, no template openers/closers ("In this article we will explore..."), no empty adjectives, and no English-translated headings such as `带走核心观点`. Write like you're explaining to a colleague, not writing a press release.
 
 ---
 

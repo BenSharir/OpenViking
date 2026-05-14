@@ -49,6 +49,16 @@ The first implementation pass should establish the article frame, not pretend to
 - Public provenance should point readers to GitHub, `docs.openviking.ai`, public discussions, and public install guides. Private Lark URLs may be useful while authoring, but should not appear in public page metadata or `/llms.txt` unless explicitly approved.
 - Public prose should be short and declarative. Avoid review-note constructions such as "the point is not X, but Y" when a direct sentence can carry the idea. Local chip rails should be non-sticky; the global Chinese and English TOC owns sticky navigation.
 
+## Design Simplification Pass — 2026-05-14
+
+- Chip navigation should read as navigation, not as part of the heading. Put the chip row on its own line and start the section title below it so repeated primitive cards have consistent rhythm.
+- Prefer a table when the user needs comparison. Decorative cards for organization paradigms looked heavier than the information they carried, so the final version uses a direct table.
+- Dense ranking charts should not stretch the whole page. Put chart and interpretation into a bounded scroll widget with its own sticky internal control, while keeping the global TOC sticky for the page.
+- Do not duplicate the same information in two adjacent formats. The long-document 01-05 cards repeated the table content and were removed.
+- Avoid repeated pull quotes inside mapped items. A sentence like "turn organization capability into an interface agents can learn" should appear once as a synthesis, not once per database type.
+- Chinese headings should not translate English product-writing habits too literally. `带走核心观点` and `带走的五个判断` became `核心观点和后续规划` and `五个核心判断`.
+- Generic Q&A / feedback blocks are easy to add and rarely useful. Remove them unless they add a concrete reader action that is not already covered by public resource links.
+
 ## Review Challenges To Expect
 
 - If the first version is too short, the user may expect deeper block-by-block rendering rather than a summary page.

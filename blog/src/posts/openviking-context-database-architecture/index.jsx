@@ -165,8 +165,8 @@ const OpenVikingArchitecturePost = ({ t }) => {
       </Quote>
 
       <P dropCap>{T({
-        en: 'The point is not that models are bad at SQL. The point is that agents need the right data substrate. They need to know where information lives, how far a search should expand, which memory belongs to whom, and whether a write is safe. OpenViking frames that substrate as a context database.',
-        zh: '重点不是模型不擅长 SQL。重点是 Agent 需要合适的数据底座：信息在哪里、检索应该扩到多深、记忆属于谁、写入是否安全。OpenViking 把这个底座定义成上下文数据库。',
+        en: 'Agents need the right data substrate. They need to know where information lives, how far a search should expand, which memory belongs to whom, and whether a write is safe. OpenViking frames that substrate as a context database.',
+        zh: 'Agent 需要合适的数据底座：信息在哪里、检索应该扩到多深、记忆属于谁、写入是否安全。OpenViking 把这个底座定义成上下文数据库。',
       })}</P>
 
       <H2>{T({ en: 'The Shape Of The System', zh: '系统的整体形态' })}</H2>
