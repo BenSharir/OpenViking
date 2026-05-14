@@ -523,13 +523,13 @@ ov observer vlm`}</Pre>
 export default function OpenVikingEnglishBlocks() {
   return (
     <>
-      <H2>I. Why Context Engineering Becomes a Database Problem</H2>
+      <H2>Why Context Engineering Becomes a Database Problem</H2>
       <EnglishContextBlocks />
 
-      <H2>II. OpenViking&apos;s Design Philosophy and Technical Model</H2>
+      <H2>OpenViking&apos;s Design Philosophy and Technical Model</H2>
       <EnglishArchitectureBlocks />
 
-      <H2>III. Product Boundaries and Team Adoption</H2>
+      <H2>Product Boundaries and Team Adoption</H2>
       <EnglishPracticeBlocks />
     </>
   );
