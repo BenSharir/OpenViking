@@ -13,12 +13,12 @@ const foundation = [
   {
     key: 'resources',
     label: 'Resources',
-    title: 'Start from the runnable project, not the slogan',
-    body: 'OpenViking is an open-source context database for agents. Start from the repository, docs, public feedback channels, and OpenClaw integration guide.',
+    title: 'Resources',
+    body: null,
     items: [
       ['Code and issues', <A href={GITHUB_URL}>volcengine/OpenViking</A>],
       ['Technical docs', <A href={DOCS_URL}>docs.openviking.ai</A>],
-      ['Community feedback', <>Join the <A href={DISCORD_URL}>Discord community</A> for usage questions, bug reports, and product expectations.</>],
+      ['Community feedback', <A href={DISCORD_URL}>Discord community</A>],
       ['OpenClaw integration', <A href={OPENCLAW_GUIDE_URL}>OpenViking memory plugin guide</A>],
     ],
   },
@@ -268,16 +268,13 @@ function ResourceSection() {
   return (
     <section>
       <H3 id="en-resources">Resources, Background, and What OpenViking Is For</H3>
-      <Lead>
-        OpenViking turns context into data agents can manage.
-      </Lead>
       <LocalNav label="section shortcuts" items={foundation} prefix="en-foundation" />
       <div className="ovx-section-stack">
         {foundation.map(section => (
           <article className="ovx-tab-panel" id={`en-foundation-${section.key}`} key={section.key}>
             <div className="ovx-kicker">{section.label}</div>
             <H4>{section.title}</H4>
-            <P>{section.body}</P>
+            {section.body && <P>{section.body}</P>}
             <div className="ovx-compare-card__rows">
               {section.items.map(([key, value]) => (
                 <div className="ovx-compare-card__row" key={key}>
@@ -623,10 +620,6 @@ ov observer vlm`}</Pre>
           <Li>Build distributed capabilities and public-cloud integrations for more reliable consistency.</Li>
         </Ol>
       </section>
-
-      <P>
-        Related resources: <A href={GITHUB_URL}>OpenViking GitHub</A>, <A href={DOCS_URL}>technical documentation</A>.
-      </P>
     </>
   );
 }

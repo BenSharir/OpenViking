@@ -1,6 +1,6 @@
 import React from 'react';
 import {
-  A, Callout, Col, Cols, H3, H4, Lead, Li, Mark, P, Pre, Quote, Small, Strong,
+  A, Callout, Col, Cols, H3, H4, Li, Mark, P, Pre, Quote, Small, Strong,
   Table, Tag, Ul,
 } from '../../blog-components';
 
@@ -13,12 +13,12 @@ const resourceSections = [
   {
     key: 'resources',
     label: '资源入口',
-    title: '把代码、文档和实践入口放在同一处',
-    copy: 'OpenViking 已提供开源代码、技术文档、社区讨论和 OpenClaw 集成指南。读者可以直接查看实现、接口和使用路径。',
+    title: '资源入口',
+    copy: null,
     bullets: [
       ['阅读代码和提 Issue', <A href={GITHUB_URL}>volcengine/OpenViking</A>],
       ['技术文档站', <A href={DOCS_URL}>docs.openviking.ai</A>],
-      ['社区反馈', <>加入 <A href={DISCORD_URL}>Discord 社区</A>，反馈使用问题、bug 和产品预期。</>],
+      ['社区反馈', <A href={DISCORD_URL}>Discord 社区</A>],
       ['OpenClaw 集成指南', <A href={OPENCLAW_GUIDE_URL}>OpenViking memory plugin guide</A>],
     ],
   },
@@ -300,9 +300,6 @@ export function ResourceDeck() {
     <section className="ovb-section" aria-labelledby="resource-deck-title">
       <div className="ovb-kicker">resources and thesis</div>
       <H3 id="resource-deck-title">资源入口、问题背景与文章主线</H3>
-      <Lead>
-        OpenViking 是开源项目，也是一套给 Agent 管理上下文的数据库范式。先看资源入口、问题背景和文章主线。
-      </Lead>
       <AnchorStrip items={resourceSections} prefix="ovb-resource" label="资源与问题背景导航" />
       <div className="ovb-stack">
         {resourceSections.map(section => (
@@ -313,7 +310,7 @@ export function ResourceDeck() {
             style={{ '--tone': '#1B365D' }}
           >
             <H4>{section.title}</H4>
-            <P>{section.copy}</P>
+            {section.copy && <P>{section.copy}</P>}
             <div className="ovb-resource-list">
               {section.bullets.map(([label, value]) => (
                 <div className="ovb-resource-row" key={label}>
@@ -325,12 +322,6 @@ export function ResourceDeck() {
           </article>
         ))}
       </div>
-      <Callout type="info" title="阅读线索">
-        <P>
-          代码说明实现方式，文档说明接口边界，社区反馈暴露真实问题，OpenClaw 集成展示 Agent 如何使用这层上下文基础设施。
-          实现细节见 <A href={DOCS_URL}>OpenViking 技术文档</A>。
-        </P>
-      </Callout>
     </section>
   );
 }
