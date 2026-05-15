@@ -258,6 +258,7 @@ class SemanticProcessor(DequeueHandlerBase):
             agent_id=msg.agent_id,
             role=msg.role,
             skip_vectorization=msg.skip_vectorization,
+            update_mode="incremental",
             changes={"modified": [uri]},
             coalesce_key=build_semantic_coalesce_key(
                 context_type=msg.context_type,
@@ -337,29 +338,13 @@ class SemanticProcessor(DequeueHandlerBase):
                         is_incremental = False
                         target_uri = msg.target_uri
                         viking_fs = get_viking_fs()
-                        if msg.target_uri:
-                            target_exists = await viking_fs.exists(
-                                msg.target_uri, ctx=self._current_ctx
-                            )
-                            # Check if target URI exists and is not the same as the source URI（避免重复处理）
-                            if (
-                                target_exists
-                                and msg.target_exists_before_enqueue
-                                and msg.uri != msg.target_uri
-                            ):
-                                is_incremental = True
-                                logger.info(
-                                    f"Target URI exists, using incremental update: {msg.target_uri}"
-                                )
-                            elif target_exists and msg.changes and msg.uri == msg.target_uri:
-                                is_incremental = True
-                                logger.info(
-                                    f"Using direct incremental semantic update for: {msg.uri}"
-                                )
-                        elif msg.changes:
+                        if msg.update_mode == "incremental":
                             is_incremental = True
-                            target_uri = msg.uri
-                            logger.info(f"Using direct incremental semantic update for: {msg.uri}")
+                            if not target_uri:
+                                target_uri = msg.uri
+                            logger.info(
+                                f"Using enqueued incremental semantic update for: {target_uri}"
+                            )
 
                         # Re-acquire lifecycle lock if handle was lost (e.g. server restart)
                         if msg.lifecycle_lock_handle_id:

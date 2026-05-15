@@ -134,6 +134,7 @@ class SessionCompressor:
                     user_id=ctx.user.user_id,
                     agent_id=ctx.user.agent_id,
                     role=ctx.role.value,
+                    update_mode="incremental",
                     changes=changes_dict,
                     telemetry_id=telemetry.telemetry_id,
                 )

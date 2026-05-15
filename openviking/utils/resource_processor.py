@@ -253,7 +253,7 @@ class ResourceProcessor:
             original_temp_uri = temp_uri  # 保存原始 temp_uri 用于最终输出
             candidate_uri = getattr(context_tree, "_candidate_uri", None) if context_tree else None
             lifecycle_lock_handle_id = ""
-            target_exists_before_enqueue_map: Dict[str, bool] = {}
+            update_mode_map: Dict[str, str] = {}
 
             if root_uri and temp_uri:
                 from openviking.storage.transaction import get_lock_manager
@@ -263,14 +263,16 @@ class ResourceProcessor:
                 viking_fs = get_viking_fs()
                 lock_manager = get_lock_manager()
                 try:
-                    target_exists_before_enqueue_map[root_uri] = await viking_fs.exists(root_uri, ctx=ctx)
+                    update_mode_map[root_uri] = (
+                        "incremental" if await viking_fs.exists(root_uri, ctx=ctx) else "full"
+                    )
                     if candidate_uri:
                         root_uri, lifecycle_lock_handle_id = await self._commit_unique_candidate(
                             candidate_uri=candidate_uri,
                             ctx=ctx,
                         )
                         result["root_uri"] = root_uri
-                        target_exists_before_enqueue_map = {root_uri: False}
+                        update_mode_map = {root_uri: "full"}
                     else:
                         dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
                         handle = lock_manager.create_handle()
@@ -313,7 +315,7 @@ class ResourceProcessor:
                             skip_vectorization=skip_vec,
                             lifecycle_lock_handle_id=lifecycle_lock_handle_id,
                             temp_uris=[temp_uri_for_summarize],
-                            target_exists_before_enqueue_map=target_exists_before_enqueue_map,
+                            update_mode_map=update_mode_map,
                             is_code_repo=is_code_repo,
                             **kwargs,
                         )

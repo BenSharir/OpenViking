@@ -5,7 +5,7 @@
 import json
 from dataclasses import asdict, dataclass
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from uuid import uuid4
 
 
@@ -18,6 +18,9 @@ def build_semantic_coalesce_key(
     agent_id: str = "default",
 ) -> str:
     return "|".join([context_type, account_id, user_id, agent_id, uri.rstrip("/")])
+
+
+SemanticUpdateMode = Literal["full", "incremental"]
 
 
 @dataclass
@@ -50,7 +53,7 @@ class SemanticMsg:
     skip_vectorization: bool = False
     telemetry_id: str = ""
     target_uri: str = ""
-    target_exists_before_enqueue: bool = False
+    update_mode: SemanticUpdateMode = "full"
     lifecycle_lock_handle_id: str = ""
     is_code_repo: bool = False
     coalesce_key: str = ""
@@ -71,7 +74,7 @@ class SemanticMsg:
         skip_vectorization: bool = False,
         telemetry_id: str = "",
         target_uri: str = "",
-        target_exists_before_enqueue: bool = False,
+        update_mode: SemanticUpdateMode = "full",
         lifecycle_lock_handle_id: str = "",
         is_code_repo: bool = False,
         coalesce_key: str = "",
@@ -89,7 +92,7 @@ class SemanticMsg:
         self.skip_vectorization = skip_vectorization
         self.telemetry_id = telemetry_id
         self.target_uri = target_uri
-        self.target_exists_before_enqueue = target_exists_before_enqueue
+        self.update_mode = update_mode
         self.lifecycle_lock_handle_id = lifecycle_lock_handle_id
         self.is_code_repo = is_code_repo
         self.coalesce_key = coalesce_key
@@ -121,6 +124,11 @@ class SemanticMsg:
                 missing.append("context_type")
             raise ValueError(f"Missing required fields: {missing}")
 
+        raw_update_mode = data.get("update_mode", "full")
+        if raw_update_mode not in {"full", "incremental"}:
+            raise ValueError(f"Invalid update_mode: {raw_update_mode}")
+        update_mode: SemanticUpdateMode = raw_update_mode
+
         obj = cls(
             uri=uri,
             context_type=context_type,
@@ -132,7 +140,7 @@ class SemanticMsg:
             skip_vectorization=data.get("skip_vectorization", False),
             telemetry_id=data.get("telemetry_id", ""),
             target_uri=data.get("target_uri", ""),
-            target_exists_before_enqueue=data.get("target_exists_before_enqueue", False),
+            update_mode=update_mode,
             lifecycle_lock_handle_id=data.get("lifecycle_lock_handle_id", ""),
             is_code_repo=data.get("is_code_repo", False),
             coalesce_key=data.get("coalesce_key", ""),

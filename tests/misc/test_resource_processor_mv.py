@@ -280,3 +280,62 @@ async def test_resource_processor_auto_candidate_skips_existing_and_busy(monkeyp
     assert fake_lock_manager.acquired_exact_paths == []
     assert fake_lock_manager.acquired_tree_paths == ["/mock/resources/root_2"]
     assert summarize_calls[0]["temp_uris"] == ["viking://temp/root_tmp"]
+    assert summarize_calls[0]["resource_uris"] == ["viking://resources/root_2"]
+    assert summarize_calls[0]["update_mode_map"] == {"viking://resources/root_2": "full"}
+
+
+@pytest.mark.asyncio
+async def test_resource_processor_explicit_to_keeps_incremental_mode(monkeypatch):
+    from openviking.utils.resource_processor import ResourceProcessor
+
+    fake_fs = _FakeVikingFS(existing_uris={"viking://resources/root"})
+    fake_lock_manager = _FakeLockManager()
+    summarize_calls = []
+
+    monkeypatch.setattr(
+        "openviking.utils.resource_processor.get_current_telemetry",
+        lambda: _DummyTelemetry(),
+    )
+    monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.transaction.get_lock_manager",
+        lambda: fake_lock_manager,
+    )
+
+    rp = ResourceProcessor(vikingdb=_DummyVikingDB(), media_storage=None)
+    rp._get_media_processor = MagicMock()
+    rp._get_media_processor.return_value.process = AsyncMock(
+        return_value=SimpleNamespace(
+            temp_dir_path="viking://temp/tmpdir",
+            source_path="x",
+            source_format="text",
+            meta={},
+            warnings=[],
+        )
+    )
+
+    context_tree = SimpleNamespace(
+        root=SimpleNamespace(uri="viking://resources/root", temp_uri="viking://temp/root_tmp")
+    )
+    rp.tree_builder.finalize_from_temp = AsyncMock(return_value=context_tree)
+    rp._summarizer = SimpleNamespace(
+        summarize=AsyncMock(
+            side_effect=lambda *args, **kwargs: (
+                summarize_calls.append(kwargs) or {"status": "success"}
+            )
+        )
+    )
+
+    result = await rp.process_resource(
+        path="x",
+        ctx=object(),
+        build_index=True,
+        to="viking://resources/root",
+    )
+
+    assert result["status"] == "success"
+    assert result["root_uri"] == "viking://resources/root"
+    assert summarize_calls[0]["resource_uris"] == ["viking://resources/root"]
+    assert summarize_calls[0]["update_mode_map"] == {"viking://resources/root": "incremental"}
+    assert fake_lock_manager.acquired_exact_paths == []
+    assert fake_lock_manager.acquired_tree_paths == ["/mock/resources/root"]

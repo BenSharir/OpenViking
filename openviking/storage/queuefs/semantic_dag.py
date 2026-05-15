@@ -123,7 +123,7 @@ class SemanticDagExecutor:
         self._refresh_task: Optional[asyncio.Task] = None
 
     def _create_on_complete_callback(self) -> Callable[[], Awaitable[None]]:
-        """Create on_complete callback for incremental update or full update."""
+        """Create on_complete callback for syncing temp content to target."""
 
         async def noop_callback() -> None:
             return
@@ -134,12 +134,10 @@ class SemanticDagExecutor:
         if self._target_uri == self._root_uri:
             return noop_callback
 
-        # If full update, move temp uri to target uri has been handled in the processor
-        if not self._incremental_update:
-            return noop_callback
-
         async def sync_diff_callback() -> None:
             try:
+                # When semantic generation runs on a temp tree, we still need to sync
+                # the finalized content into target_uri after DAG completion, even for full imports.
                 diff = await self._processor._sync_topdown_recursive(
                     self._root_uri,
                     self._target_uri,

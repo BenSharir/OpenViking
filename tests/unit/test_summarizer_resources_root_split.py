@@ -90,7 +90,7 @@ async def test_resources_root_is_split_into_children():
         "viking://temp/import_root/existing_a",
         "viking://temp/import_root/new_c",
     ]
-    assert [m.target_exists_before_enqueue for m in queue.msgs] == [True, False]
+    assert [m.update_mode for m in queue.msgs] == ["incremental", "full"]
 
 
 @pytest.mark.asyncio
@@ -122,7 +122,7 @@ async def test_resources_root_single_file_child():
     assert res["enqueued_count"] == 1
     assert queue.msgs[0].target_uri == "viking://resources/file.txt"
     assert queue.msgs[0].uri == "viking://temp/import_root/file.txt"
-    assert queue.msgs[0].target_exists_before_enqueue is False
+    assert queue.msgs[0].update_mode == "full"
 
 
 @pytest.mark.asyncio
@@ -154,11 +154,11 @@ async def test_explicit_subpath_not_split():
     assert res["enqueued_count"] == 1
     assert queue.msgs[0].target_uri == "viking://resources/foo"
     assert queue.msgs[0].uri == "viking://temp/import_root"
-    assert queue.msgs[0].target_exists_before_enqueue is False
+    assert queue.msgs[0].update_mode == "full"
 
 
 @pytest.mark.asyncio
-async def test_explicit_target_exists_map_overrides_runtime_exists_check():
+async def test_explicit_update_mode_map_overrides_runtime_exists_check():
     queue = _DummyQueue()
     qm = _DummyQueueManager(queue)
     vfs = _DummyVikingFS({"viking://resources/tt_a": []})
@@ -180,13 +180,13 @@ async def test_explicit_target_exists_map_overrides_runtime_exists_check():
             resource_uris=["viking://resources/tt_a"],
             ctx=ctx,
             temp_uris=["viking://temp/import_root/tt_a"],
-            target_exists_before_enqueue_map={"viking://resources/tt_a": False},
+            update_mode_map={"viking://resources/tt_a": "full"},
         )
 
     assert res["status"] == "success"
     assert res["enqueued_count"] == 1
     assert queue.msgs[0].target_uri == "viking://resources/tt_a"
-    assert queue.msgs[0].target_exists_before_enqueue is False
+    assert queue.msgs[0].update_mode == "full"
 
 
 @pytest.mark.asyncio

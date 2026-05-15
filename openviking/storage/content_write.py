@@ -403,6 +403,7 @@ class ContentWriteCoordinator:
             role=ctx.role.value,
             skip_vectorization=False,
             telemetry_id=telemetry.telemetry_id,
+            update_mode="incremental",
             lifecycle_lock_handle_id=lifecycle_lock_handle_id,
             coalesce_key=(
                 build_semantic_coalesce_key(
@@ -446,6 +447,7 @@ class ContentWriteCoordinator:
             role=ctx.role.value,
             skip_vectorization=False,
             telemetry_id=telemetry.telemetry_id,
+            update_mode="incremental",
             lifecycle_lock_handle_id=lifecycle_lock_handle_id,
             coalesce_key=build_semantic_coalesce_key(
                 context_type="memory",

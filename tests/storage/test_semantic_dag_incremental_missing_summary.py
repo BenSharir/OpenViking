@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.queuefs.semantic_msg import SemanticMsg
+from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.queuefs.semantic_dag import SemanticDagExecutor
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -210,5 +212,112 @@ async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypa
     assert "- b.txt: old-b" in overview
 
 
+@pytest.mark.asyncio
+async def test_full_update_syncs_temp_content_to_target(monkeypatch):
+    _mock_transaction_layer(monkeypatch)
+
+    root_uri = "viking://temp/default/run1/tt_a"
+    target_uri = "viking://resources/tt_a"
+    tree = {
+        root_uri: [{"name": "a.txt", "isDir": False}],
+        target_uri: [],
+    }
+
+    fake_fs = _FakeVikingFS(
+        tree=tree,
+        file_contents={
+            f"{root_uri}/a.txt": "hello",
+        },
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+
+    processor = _FakeProcessor(fake_fs)
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
+    executor = SemanticDagExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=2,
+        ctx=ctx,
+        incremental_update=False,
+        target_uri=target_uri,
+    )
+    monkeypatch.setattr(executor, "_add_vectorize_task", AsyncMock())
+
+    await executor.run(root_uri)
+
+    assert processor.sync_calls == [(root_uri, target_uri)]
+    assert fake_fs._file_contents[f"{target_uri}/a.txt"] == "hello"
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+@pytest.mark.asyncio
+async def test_semantic_processor_uses_enqueued_incremental_mode_without_runtime_exists(
+    monkeypatch,
+):
+    processor = SemanticProcessor()
+    observed = {}
+
+    class _FailExistsFS:
+        async def exists(self, uri, ctx=None):
+            raise AssertionError("runtime exists check should not decide update mode")
+
+        def _uri_to_path(self, uri, ctx=None):
+            return uri.replace("viking://", "/local/")
+
+    class _DummyExecutor:
+        stale = False
+
+        def __init__(self, **kwargs):
+            observed.update(kwargs)
+
+        async def run(self, uri):
+            observed["run_uri"] = uri
+
+        def get_stats(self):
+            return {}
+
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+        lambda: _FailExistsFS(),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.SemanticDagExecutor",
+        _DummyExecutor,
+    )
+    monkeypatch.setattr(processor, "_ensure_lifecycle_lock", AsyncMock(return_value=""))
+    monkeypatch.setattr(processor, "_cache_dag_stats", lambda *args, **kwargs: None)
+    monkeypatch.setattr(processor, "_enqueue_parent_refresh", AsyncMock())
+    monkeypatch.setattr(processor, "report_success", lambda *args, **kwargs: None)
+    monkeypatch.setattr(processor, "report_requeue", lambda *args, **kwargs: None)
+    monkeypatch.setattr(processor, "report_error", lambda *args, **kwargs: None)
+    monkeypatch.setattr(processor._circuit_breaker, "check", lambda: None)
+    monkeypatch.setattr(processor._circuit_breaker, "record_success", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.bind_root_observability_context",
+        lambda attrs: None,
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.reset_root_observability_context",
+        lambda token: None,
+    )
+
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
+    msg = SemanticMsg(
+        uri="viking://temp/root",
+        context_type="resource",
+        account_id=ctx.account_id,
+        user_id=ctx.user.user_id,
+        agent_id=ctx.user.agent_id,
+        role=ctx.role.value,
+        target_uri="viking://resources/root",
+        update_mode="incremental",
+    )
+
+    await processor.on_dequeue(msg.to_dict())
+
+    assert observed["incremental_update"] is True
+    assert observed["target_uri"] == "viking://resources/root"
+    assert observed["run_uri"] == "viking://temp/root"

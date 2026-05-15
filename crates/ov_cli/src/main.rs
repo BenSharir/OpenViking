@@ -179,7 +179,7 @@ enum Commands {
     AddResource {
         /// Local path or URL to import
         path: String,
-        /// Exact target URI (must not exist yet) (cannot be used with --parent)
+        /// Exact target URI (existing targets are updated incrementally) (cannot be used with --parent)
         #[arg(long)]
         to: Option<String>,
         /// Target parent URI (must already exist and be a directory) (cannot be used with --to)
