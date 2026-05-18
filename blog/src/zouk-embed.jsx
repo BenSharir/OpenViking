@@ -327,7 +327,7 @@ function parseInjectedMessage(content) {
     };
     const context = [
       { key: 'url', value: readTag('url') },
-      { key: 'referenced text', value: readTag('referenced-text') || readTag('selected-text') },
+      { key: 'referenced', value: readTag('referenced-text') || readTag('selected-text') },
     ].filter((item) => item.value);
     return { context: context.length ? context : null, body: text.slice(xmlMatch[0].length).trimStart() };
   }
@@ -342,7 +342,7 @@ function parseInjectedMessage(content) {
     const key = rawKey === 'site_url'
       ? 'url'
       : rawKey === 'selected_text'
-        ? 'referenced text'
+        ? 'referenced'
         : rawKey.replace(/_/g, ' ');
     let value = line.slice(index + 1).trim();
     if (value.startsWith('"') && value.endsWith('"')) {
@@ -409,7 +409,7 @@ function ContextPreview({ sourceUrl, referencedText, includeUrl }) {
       ) : null}
       {reference ? (
         <div className="zouk-context-preview__row">
-          <span>referenced text</span>
+          <span>referenced</span>
           <strong>{reference}</strong>
         </div>
       ) : null}
