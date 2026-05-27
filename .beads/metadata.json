@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "openviking",
+  "project_id": "dc0a9f58-73ee-45c0-afcc-04f6a41f9f3c"
+}
