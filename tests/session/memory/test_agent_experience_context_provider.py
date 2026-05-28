@@ -7,8 +7,9 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from openviking.server.identity import AccountNamespacePolicy, RequestContext, Role
-from openviking.session.memory.agent_experience_context_provider import AgentExperienceContextProvider
-from openviking.session.memory.memory_updater import ExtractContext
+from openviking.session.memory.agent_experience_context_provider import (
+    AgentExperienceContextProvider,
+)
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -77,7 +78,9 @@ async def test_agent_experience_prefetch_includes_structured_read_results():
     provider._transaction_handle = None
 
     provider.search_files = AsyncMock(
-        return_value=["viking://agent/agent_sample_9/memories/experiences/personal_experience_sharing_conversation_flow.md"]
+        return_value=[
+            "viking://agent/agent_sample_9/memories/experiences/personal_experience_sharing_conversation_flow.md"
+        ]
     )
 
     read_result = {
@@ -102,5 +105,91 @@ async def test_agent_experience_prefetch_includes_structured_read_results():
 
     assert any(msg.get("role") == "user" for msg in messages)
     assert add_tool_call_pair.call_count == 2
-    assert add_tool_call_pair.call_args_list[1].kwargs["result"]["context_role"] == "candidate_experience"
+    assert (
+        add_tool_call_pair.call_args_list[1].kwargs["result"]["context_role"]
+        == "candidate_experience"
+    )
     assert add_tool_call_pair.call_args_list[1].kwargs["result"]["page_id"] == 1
+
+
+@pytest.mark.asyncio
+async def test_load_source_trajectories_ignores_non_trajectory_derived_from_links():
+    provider = AgentExperienceContextProvider(
+        messages=[],
+        trajectory_summary="album release party discussion",
+        trajectory_uri="viking://agent/agent_sample_9/memories/trajectories/album_release_party_discussion.md",
+    )
+    provider._ctx = RequestContext(
+        user=UserIdentifier(account_id="acc", user_id="user_1", agent_id="agent_sample_9"),
+        role=Role.USER,
+        namespace_policy=AccountNamespacePolicy(),
+    )
+
+    viking_fs = AsyncMock()
+    viking_fs.read_file.return_value = "trajectory body"
+
+    with patch(
+        "openviking.session.memory.agent_experience_context_provider.MemoryFileUtils.read"
+    ) as read_memory:
+        read_memory.return_value = SimpleNamespace(
+            to_metadata=lambda: {"memory_type": "trajectories"},
+            content="trajectory body",
+        )
+        result = await provider._load_source_trajectories(
+            "viking://agent/agent_sample_9/memories/experiences/personal_experience_sharing_conversation_flow.md",
+            links=[
+                {
+                    "link_type": "derived_from",
+                    "to_uri": "viking://agent/conv-42/memories/experiences/extract_conversation_interests.md",
+                },
+                {
+                    "link_type": "derived_from",
+                    "to_uri": "viking://agent/agent_sample_9/memories/trajectories/real-traj.md",
+                },
+            ],
+            viking_fs=viking_fs,
+            ctx=provider._ctx,
+        )
+
+    assert [item["uri"] for item in result] == [
+        "viking://agent/agent_sample_9/memories/trajectories/real-traj.md"
+    ]
+    viking_fs.read_file.assert_awaited_once_with(
+        "viking://agent/agent_sample_9/memories/trajectories/real-traj.md",
+        ctx=provider._ctx,
+    )
+
+
+@pytest.mark.asyncio
+async def test_load_source_trajectories_logs_warning_when_trajectory_missing():
+    provider = AgentExperienceContextProvider(
+        messages=[],
+        trajectory_summary="album release party discussion",
+        trajectory_uri="viking://agent/agent_sample_9/memories/trajectories/album_release_party_discussion.md",
+    )
+    provider._ctx = RequestContext(
+        user=UserIdentifier(account_id="acc", user_id="user_1", agent_id="agent_sample_9"),
+        role=Role.USER,
+        namespace_policy=AccountNamespacePolicy(),
+    )
+
+    viking_fs = AsyncMock()
+    viking_fs.read_file.side_effect = FileNotFoundError("File not found")
+
+    with patch(
+        "openviking.session.memory.agent_experience_context_provider.logger.warning"
+    ) as warning:
+        result = await provider._load_source_trajectories(
+            "viking://agent/agent_sample_9/memories/experiences/personal_experience_sharing_conversation_flow.md",
+            links=[
+                {
+                    "link_type": "derived_from",
+                    "to_uri": "viking://agent/agent_sample_9/memories/trajectories/missing-traj.md",
+                }
+            ],
+            viking_fs=viking_fs,
+            ctx=provider._ctx,
+        )
+
+    assert result == []
+    warning.assert_called_once()

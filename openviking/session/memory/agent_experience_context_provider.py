@@ -116,6 +116,10 @@ All memory content must be written in {output_language}.
             },
         )
 
+    @staticmethod
+    def _is_trajectory_uri(uri: str) -> bool:
+        return "/memories/trajectories/" in (uri or "")
+
     async def _load_source_trajectories(
         self,
         exp_uri: str,
@@ -127,7 +131,11 @@ All memory content must be written in {output_language}.
         uris = [
             link.get("to_uri", "")
             for link in (links or [])
-            if link.get("link_type") == "derived_from" and link.get("to_uri", "")
+            if (
+                link.get("link_type") == "derived_from"
+                and link.get("to_uri", "")
+                and self._is_trajectory_uri(link.get("to_uri", ""))
+            )
         ]
 
         recent_uris = uris[-MAX_SOURCE_TRAJS:]
@@ -141,7 +149,12 @@ All memory content must be written in {output_language}.
                 result["uri"] = uri
                 results.append(result)
             except Exception as e:
-                tracer.error(f"Failed to read source trajectory {uri}: {e}")
+                logger.warning(
+                    "Failed to read source trajectory for candidate experience %s: %s (%s)",
+                    exp_uri,
+                    uri,
+                    e,
+                )
         return results
 
     def _build_context_result(

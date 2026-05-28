@@ -22,7 +22,11 @@ from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater
 from openviking.session.memory.dataclass import ResolvedOperations, StoredLink
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
-from openviking.session.memory.memory_updater import ExtractContext, MemoryUpdateResult, write_stored_links
+from openviking.session.memory.memory_updater import (
+    ExtractContext,
+    MemoryUpdateResult,
+    write_stored_links,
+)
 from openviking.session.memory.utils.json_parser import JsonUtils
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.uri import render_template
@@ -909,7 +913,11 @@ class SessionCompressorV2:
                     inherited = [
                         link.get("to_uri", "")
                         for link in old_mf.links
-                        if link.get("link_type") == "derived_from" and link.get("to_uri", "")
+                        if (
+                            link.get("link_type") == "derived_from"
+                            and link.get("to_uri", "")
+                            and "/memories/trajectories/" in link.get("to_uri", "")
+                        )
                     ]
                     if inherited:
                         inheritance_map[new_uri] = inherited
@@ -974,6 +982,7 @@ class SessionCompressorV2:
         viking_fs,
     ) -> None:
         from datetime import timezone
+
         from openviking.session.memory.merge_op.link_merge import merge_links
 
         raw = await viking_fs.read_file(exp_uri, ctx=ctx) or ""
@@ -983,7 +992,9 @@ class SessionCompressorV2:
         # write_stored_links writes it to exp.links (forward) and traj.backlinks (reverse) automatically.
         now = datetime.now(timezone.utc).isoformat()
         links = [
-            StoredLink(from_uri=exp_uri, to_uri=t, link_type="derived_from", weight=1.0, created_at=now)
+            StoredLink(
+                from_uri=exp_uri, to_uri=t, link_type="derived_from", weight=1.0, created_at=now
+            )
             for t in traj_uris
         ]
 
@@ -993,7 +1004,9 @@ class SessionCompressorV2:
 
         if links_changed:
             await viking_fs.write_file(exp_uri, MemoryFileUtils.write(mf), ctx=ctx)
-            tracer.info(f"[agent_link] wrote exp→traj links -> {exp_uri} (traj_count={len(traj_uris)})")
+            tracer.info(
+                f"[agent_link] wrote exp→traj links -> {exp_uri} (traj_count={len(traj_uris)})"
+            )
         else:
             tracer.info(f"[agent_link] links already present, skip: {exp_uri}")
 

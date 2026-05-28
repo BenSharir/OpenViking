@@ -707,23 +707,79 @@ class TestCompressorV2:
         # exp: exp.links 有指向 traj 的边（exp→traj, derived_from）
         exp_mf = MemoryFileUtils.read(viking_fs.files[exp_uri], uri=exp_uri)
         assert "source_trajectories" not in exp_mf.extra_fields
-        assert any(l.get("to_uri") == traj_uri for l in exp_mf.links), "exp.links should point to traj"
+        assert any(l.get("to_uri") == traj_uri for l in exp_mf.links), (
+            "exp.links should point to traj"
+        )
         assert exp_mf.backlinks == [], "exp should have no backlinks"
 
         # traj: write_stored_links 写入 traj.backlinks（同一条边的 to 端）
         traj_mf = MemoryFileUtils.read(viking_fs.files[traj_uri], uri=traj_uri)
         assert traj_mf.links == [], "traj should have no forward links"
-        assert any(l.get("from_uri") == exp_uri for l in traj_mf.backlinks), "traj.backlinks should reference exp"
+        assert any(l.get("from_uri") == exp_uri for l in traj_mf.backlinks), (
+            "traj.backlinks should reference exp"
+        )
 
         # event order: lock → read exp → write exp → read traj → write traj → release
         assert events == [
             "exact:/local/default/agent/default/memories/experiences/debug.md",
-            "read",   # exp read
+            "read",  # exp read
             "write",  # exp write (exp.links)
-            "read",   # traj read  (write_stored_links)
+            "read",  # traj read  (write_stored_links)
             "write",  # traj write (traj.backlinks)
             "release",
         ]
+
+    @pytest.mark.asyncio
+    async def test_resolve_supersedes_inherits_only_trajectory_links(self):
+        compressor = SessionCompressorV2(vikingdb=None)
+        user = UserIdentifier.the_default_user()
+        ctx = RequestContext(user=user, role=Role.ROOT)
+        exp_dir = "viking://agent/default/memories/experiences"
+        old_uri = f"{exp_dir}/old.md"
+        new_uri = f"{exp_dir}/new.md"
+
+        old_mf = MemoryFile(
+            uri=old_uri,
+            content="old experience",
+            links=[
+                {
+                    "from_uri": old_uri,
+                    "to_uri": "viking://agent/default/memories/experiences/extract_conversation_interests.md",
+                    "link_type": "derived_from",
+                },
+                {
+                    "from_uri": old_uri,
+                    "to_uri": "viking://agent/default/memories/trajectories/traj-1.md",
+                    "link_type": "derived_from",
+                },
+            ],
+        )
+
+        operations = SimpleNamespace(
+            upsert_operations=[
+                SimpleNamespace(
+                    memory_type="experiences",
+                    memory_fields={"experience_name": "new", "supersedes": "old"},
+                    uris=[new_uri],
+                )
+            ],
+            delete_file_contents=[],
+        )
+
+        provider = SimpleNamespace(_render_experience_dir=lambda _ctx: exp_dir)
+        viking_fs = SimpleNamespace(read_file=AsyncMock(return_value=MemoryFileUtils.write(old_mf)))
+
+        inheritance_map = await compressor._resolve_supersedes(
+            operations,
+            ctx,
+            viking_fs,
+            provider,
+        )
+
+        assert inheritance_map == {
+            new_uri: ["viking://agent/default/memories/trajectories/traj-1.md"]
+        }
+        assert len(operations.delete_file_contents) == 1
 
 
 class TestExtractLoopPatchRepair:
