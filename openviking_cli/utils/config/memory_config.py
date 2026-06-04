@@ -107,6 +107,16 @@ class MemoryConfig(BaseModel):
             "no page_id or link fields are generated, and link resolution is skipped."
         ),
     )
+    input_window_tokens: int = Field(
+        default=128000,
+        ge=1,
+        description=(
+            "Unified model input window budget for memory-related extraction flows. "
+            "Context providers reserve part of this budget for prompts, schemas, prefetched "
+            "context, and tool transcripts, and the remaining budget is used to segment "
+            "conversation messages before extraction."
+        ),
+    )
 
     model_config = {"extra": "forbid"}
 

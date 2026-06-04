@@ -46,6 +46,10 @@ _PREFETCH_SEARCH_TOOL_FIELD_MAX_CHARS = 500
 class SessionExtractContextProvider(ExtractContextProvider):
     """会话提取 Provider - 从会话消息中提取记忆"""
 
+    @staticmethod
+    def get_reserve_tokens() -> int:
+        return 32768
+
     def __init__(
         self,
         messages: Any,

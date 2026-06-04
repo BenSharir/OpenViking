@@ -41,6 +41,10 @@ class AgentTrajectoryContextProvider(SessionExtractContextProvider):
         "_transaction_handle",
     }
 
+    @staticmethod
+    def get_reserve_tokens() -> int:
+        return 40960
+
     def __init__(
         self,
         *args,

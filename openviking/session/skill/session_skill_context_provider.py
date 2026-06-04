@@ -86,6 +86,10 @@ def build_skill_read_result(
 class SessionSkillContextProvider(SessionExtractContextProvider):
     """Provider that reuses session ReAct extraction for real skill assets."""
 
+    @staticmethod
+    def get_reserve_tokens() -> int:
+        return 32768
+
     def instruction(self) -> str:
         return (
             "You are an extraction agent. Analyze the archived conversation, use read when "

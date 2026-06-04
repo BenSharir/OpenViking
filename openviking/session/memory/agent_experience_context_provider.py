@@ -37,6 +37,10 @@ MAX_SOURCE_TRAJS = 3  # max trajectories to load per experience
 class AgentExperienceContextProvider(SessionExtractContextProvider):
     """Phase 2 provider: consolidate the new trajectory into experience memories."""
 
+    @staticmethod
+    def get_reserve_tokens() -> int:
+        return 24576
+
     def __init__(
         self,
         messages: Any,
