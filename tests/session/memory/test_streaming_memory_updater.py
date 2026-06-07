@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
@@ -14,6 +15,7 @@ from openviking.session.memory.dataclass import (
     MemoryTypeSchema,
     ResolvedOperation,
     ResolvedOperations,
+    StoredLink,
 )
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.merge_op.base import FieldType, MergeOp
@@ -127,7 +129,11 @@ async def test_streaming_memory_updater_submit_applies_fast_path(monkeypatch):
 
     updater = StreamingMemoryUpdater(
         registry=_registry(),
-        config=StreamingMemoryUpdaterConfig(max_operations_per_update=8, max_wait_seconds=60),
+        config=StreamingMemoryUpdaterConfig(
+            max_operations_per_update=8,
+            max_wait_seconds=0.01,
+            timer_check_interval_seconds=0.01,
+        ),
     )
     result = await updater.submit(
         MemoryUpdateRequest(
@@ -148,3 +154,87 @@ async def test_streaming_memory_updater_submit_applies_fast_path(monkeypatch):
     written_uri, written_content, _ = fs.writes[0]
     assert written_uri.endswith("/memories/cases/重复预订处理.md")
     assert "重复预订处理" in written_content
+
+
+@pytest.mark.asyncio
+async def test_streaming_memory_updater_batches_concurrent_submits_and_filters_links(monkeypatch):
+    fs = InMemoryVikingFS(
+        {
+            "viking://user/u/memories/events/existing.md": (
+                "existing\n<!-- MEMORY_FIELDS\n"
+                '{"memory_type":"events","content":"existing"}\n'
+                "-->"
+            )
+        }
+    )
+    fs.search = AsyncMock(return_value=[])
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.get_viking_fs",
+        lambda: fs,
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.memory_updater.get_viking_fs",
+        lambda: fs,
+    )
+
+    updater = StreamingMemoryUpdater(
+        registry=_registry(),
+        config=StreamingMemoryUpdaterConfig(
+            max_operations_per_update=8,
+            max_wait_seconds=0.01,
+            timer_check_interval_seconds=0.01,
+        ),
+    )
+    op1 = _case_op("并发案例A")
+    op2 = _case_op("并发案例B")
+    link = StoredLink(
+        from_uri=op1.uris[0],
+        to_uri="viking://user/u/memories/events/existing.md",
+        link_type="related_to",
+        weight=0.8,
+        match_text="并发",
+        description="valid link",
+    )
+    duplicate_link = link.model_copy(update={"weight": 0.6, "description": "short"})
+    missing_link = StoredLink(
+        from_uri=op2.uris[0],
+        to_uri="viking://user/u/memories/events/missing.md",
+        link_type="related_to",
+        weight=0.9,
+        match_text="缺失",
+        description="invalid link",
+    )
+
+    result1, result2 = await asyncio.gather(
+        updater.submit(
+            MemoryUpdateRequest(
+                operations=ResolvedOperations(
+                    upsert_operations=[op1],
+                    delete_file_contents=[],
+                    errors=[],
+                    resolved_links=[link, duplicate_link],
+                ),
+                messages=[Message(id="m1", role="user", parts=[TextPart("并发A")])],
+                ctx=_ctx(),
+            )
+        ),
+        updater.submit(
+            MemoryUpdateRequest(
+                operations=ResolvedOperations(
+                    upsert_operations=[op2],
+                    delete_file_contents=[],
+                    errors=[],
+                    resolved_links=[missing_link],
+                ),
+                messages=[Message(id="m2", role="user", parts=[TextPart("并发B")])],
+                ctx=_ctx(),
+            )
+        ),
+    )
+
+    assert result1 is result2
+    assert result1.request_count == 2
+    assert len(result1.operations.upsert_operations) == 2
+    assert len(result1.operations.resolved_links) == 1
+    assert result1.operations.resolved_links[0].to_uri.endswith("/events/existing.md")
+    assert sorted(result1.apply_result.written_uris) == sorted([op1.uris[0], op2.uris[0]])

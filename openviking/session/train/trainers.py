@@ -11,12 +11,11 @@ case rollout execution.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import threading
-import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Hashable
 
+from openviking.session.streaming_batcher import StreamingBatcher, StreamingBatcherConfig
 from openviking.session.train.domain import (
     ApplyResult,
     ExperienceSet,
@@ -92,7 +91,7 @@ class StreamingPolicyTrainerConfig:
     """Configuration for automatic streaming rollout training."""
 
     max_gradients_per_update: int = 8
-    max_wait_seconds: float = 30.0
+    max_wait_seconds: float = 10.0
     timer_check_interval_seconds: float = 1.0
     trace_console: bool = False
 
@@ -134,10 +133,9 @@ class StreamingPolicyTrainer:
     context: PipelineContext | Any = None
     config: StreamingPolicyTrainerConfig = field(default_factory=StreamingPolicyTrainerConfig)
     _core: _PolicyTrainerCore = field(init=False, repr=False)
-    _buffer: list[_BufferedGradient] = field(init=False, repr=False)
-    _buffer_lock: asyncio.Lock = field(init=False, repr=False)
-    _flush_lock: asyncio.Lock = field(init=False, repr=False)
-    _timer_task: asyncio.Task[Any] | None = field(init=False, default=None, repr=False)
+    _batcher: StreamingBatcher[_BufferedRolloutTraining, RolloutTrainingResult] = field(
+        init=False, repr=False
+    )
     _last_apply_result: ApplyResult | None = field(init=False, default=None, repr=False)
     _closed: bool = field(init=False, default=False, repr=False)
 
@@ -149,10 +147,16 @@ class StreamingPolicyTrainer:
             policy_optimizer=self.policy_optimizer,
             policy_updater=self.policy_updater,
         )
-        self._buffer: list[_BufferedGradient] = []
-        self._buffer_lock = asyncio.Lock()
-        self._flush_lock = asyncio.Lock()
-        self._timer_task: asyncio.Task[Any] | None = None
+        self._batcher = StreamingBatcher(
+            name="openviking-streaming-policy-trainer",
+            process_batch=self._process_batch,
+            config=StreamingBatcherConfig(
+                max_items_per_batch=self.config.max_gradients_per_update,
+                max_wait_seconds=self.config.max_wait_seconds,
+                timer_check_interval_seconds=self.config.timer_check_interval_seconds,
+            ),
+            item_size=lambda item: len(item.gradients),
+        )
         self._last_apply_result: ApplyResult | None = None
         self._closed = False
 
@@ -163,8 +167,7 @@ class StreamingPolicyTrainer:
     async def get_buffered_gradient_count(self) -> int:
         """Return the current buffered gradient count under the buffer lock."""
 
-        async with self._buffer_lock:
-            return len(self._buffer)
+        return await self._batcher.get_buffered_size()
 
     @property
     def closed(self) -> bool:
@@ -181,159 +184,88 @@ class StreamingPolicyTrainer:
         if self._closed:
             return None
         self._closed = True
-        await self._stop_timer_task()
-        return await self._flush_ready_batch(reason="close")
+        return await self._batcher.close()
 
     @tracer("train.streaming_policy_trainer.submit_rollout", ignore_result=True, ignore_args=True)
-    async def submit_rollout(self, rollout: Rollout) -> RolloutTrainingResult | None:
-        """Submit one realtime rollout and maybe trigger an automatic update.
+    async def submit_rollout(self, rollout: Rollout) -> RolloutTrainingResult:
+        """Submit one realtime rollout and wait for its batch update result.
 
-        Returns a ``RolloutTrainingResult`` only when this submission triggers a
-        count-based flush.  Otherwise it returns ``None`` after buffering the
-        estimated gradients; a later submit or the timer loop will flush them.
+        The rollout is analyzed and converted to gradients immediately, then
+        buffered by the shared count/time window.  This method returns only
+        after the batch containing this rollout has been optimized and applied.
         """
 
         if self._closed:
             raise RuntimeError("StreamingPolicyTrainer is closed")
         _validate_rollouts_have_cases([rollout])
-        self._ensure_timer_task()
         analysis = await self.rollout_analyzer.analyze(rollout, self.context.analysis_context)
         gradients = await self.gradient_estimator.estimate(
             analysis,
             self.policy_set,
             self.context.gradient_context,
         )
-        should_flush = False
-        async with self._buffer_lock:
-            now = time.monotonic()
-            self._buffer.extend(
-                _BufferedGradient(
-                    gradient=gradient,
-                    analysis=analysis,
-                    rollout=rollout,
-                    submitted_at=now,
-                )
-                for gradient in gradients
-            )
-            should_flush = len(self._buffer) >= self.config.max_gradients_per_update
-            tracer.info(
-                "StreamingPolicyTrainer buffered rollout "
-                f"rollout_case={rollout.case.name} "
-                f"new_gradients={len(gradients)} "
-                f"buffered_gradients={len(self._buffer)} "
-                f"should_flush={should_flush}",
-                console=self.config.trace_console,
-            )
-
-        if should_flush:
-            return await self._flush_ready_batch(reason="count")
-        return None
-
-    def _ensure_timer_task(self) -> None:
-        if self._timer_task is not None and not self._timer_task.done():
-            return
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            logger.warning(
-                "[StreamingPolicyTrainer] timer loop not started: reason=no running event loop"
-            )
-            self._timer_task = None
-            return
-        self._timer_task = loop.create_task(
-            self._run_timer_loop(),
-            name="openviking-streaming-policy-trainer-flush-loop",
+        tracer.info(
+            "StreamingPolicyTrainer buffered rollout "
+            f"rollout_case={rollout.case.name} "
+            f"new_gradients={len(gradients)}",
+            console=self.config.trace_console,
         )
-
-    async def _stop_timer_task(self) -> None:
-        task = self._timer_task
-        if task is None:
-            return
-        self._timer_task = None
-        if task.done():
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
-            return
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
-
-    async def _run_timer_loop(self) -> None:
-        while True:
-            try:
-                await asyncio.sleep(self.config.timer_check_interval_seconds)
-                if await self._should_flush_by_time():
-                    await self._flush_ready_batch(reason="time")
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                logger.warning(f"[StreamingPolicyTrainer] timer flush loop iteration failed: {exc}")
-
-    async def _should_flush_by_time(self) -> bool:
-        async with self._buffer_lock:
-            if not self._buffer:
-                return False
-            oldest_submitted_at = min(item.submitted_at for item in self._buffer)
-            return (time.monotonic() - oldest_submitted_at) >= self.config.max_wait_seconds
-
-    async def _flush_ready_batch(self, *, reason: str) -> RolloutTrainingResult | None:
-        async with self._flush_lock:
-            async with self._buffer_lock:
-                if not self._buffer:
-                    return None
-                items = self._buffer
-                self._buffer = []
-
-            gradients = [item.gradient for item in items]
-            analyses = _unique_by_identity([item.analysis for item in items])
-            rollouts = _unique_by_identity([item.rollout for item in items])
-            tracer.info(
-                "StreamingPolicyTrainer flush started "
-                f"reason={reason} "
-                f"rollout_count={len(rollouts)} "
-                f"analysis_count={len(analyses)} "
-                f"gradient_count={len(gradients)}",
-                console=self.config.trace_console,
+        result = await self._batcher.submit(
+            _BufferedRolloutTraining(
+                gradients=list(gradients),
+                analysis=analysis,
+                rollout=rollout,
             )
-            try:
-                plan, apply_result = await self._core.plan_and_apply(
-                    gradients=gradients,
-                    policy_set=self.policy_set,
-                    ctx=self.context,
-                )
-            except Exception:
-                await self._restore_front(items)
-                raise
+        )
+        self._last_apply_result = result.apply_result
+        return result
 
-            self.policy_set = apply_result.updated_policy_set
-            self._last_apply_result = apply_result
-            result = RolloutTrainingResult(
-                analyses=analyses,
-                gradients=gradients,
-                plan=plan,
-                apply_result=apply_result,
-                metadata={
-                    "policy_set_root_uri": apply_result.updated_policy_set.root_uri,
-                    "rollout_count": len(rollouts),
-                    "analysis_count": len(analyses),
-                    "gradient_count": len(gradients),
-                    "score": _average_score(analyses),
-                    "source": "streaming_rollouts",
-                    "flush_reason": reason,
-                },
-            )
-            tracer.info(
-                "StreamingPolicyTrainer flush finished "
-                f"reason={reason} "
-                f"written_uris={apply_result.written_uris} "
-                f"errors={apply_result.errors}",
-                console=self.config.trace_console,
-            )
-            return result
-
-    async def _restore_front(self, items: list[_BufferedGradient]) -> None:
-        async with self._buffer_lock:
-            self._buffer = [*items, *self._buffer]
+    async def _process_batch(
+        self,
+        items: list["_BufferedRolloutTraining"],
+        reason: str,
+    ) -> RolloutTrainingResult:
+        gradients = [gradient for item in items for gradient in item.gradients]
+        analyses = _unique_by_identity([item.analysis for item in items])
+        rollouts = _unique_by_identity([item.rollout for item in items])
+        tracer.info(
+            "StreamingPolicyTrainer flush started "
+            f"reason={reason} "
+            f"rollout_count={len(rollouts)} "
+            f"analysis_count={len(analyses)} "
+            f"gradient_count={len(gradients)}",
+            console=self.config.trace_console,
+        )
+        plan, apply_result = await self._core.plan_and_apply(
+            gradients=gradients,
+            policy_set=self.policy_set,
+            ctx=self.context,
+        )
+        self.policy_set = apply_result.updated_policy_set
+        self._last_apply_result = apply_result
+        result = RolloutTrainingResult(
+            analyses=analyses,
+            gradients=gradients,
+            plan=plan,
+            apply_result=apply_result,
+            metadata={
+                "policy_set_root_uri": apply_result.updated_policy_set.root_uri,
+                "rollout_count": len(rollouts),
+                "analysis_count": len(analyses),
+                "gradient_count": len(gradients),
+                "score": _average_score(analyses),
+                "source": "streaming_rollouts",
+                "flush_reason": reason,
+            },
+        )
+        tracer.info(
+            "StreamingPolicyTrainer flush finished "
+            f"reason={reason} "
+            f"written_uris={apply_result.written_uris} "
+            f"errors={apply_result.errors}",
+            console=self.config.trace_console,
+        )
+        return result
 
 
 @dataclass(slots=True)
@@ -410,11 +342,10 @@ class _PolicyTrainerCore:
 
 
 @dataclass(slots=True)
-class _BufferedGradient:
-    gradient: SemanticGradient
+class _BufferedRolloutTraining:
+    gradients: list[SemanticGradient]
     analysis: RolloutAnalysis
     rollout: Rollout
-    submitted_at: float
 
 
 _streaming_policy_trainer_registry: dict[Hashable, StreamingPolicyTrainer] = {}

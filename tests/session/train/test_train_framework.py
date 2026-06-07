@@ -451,12 +451,11 @@ async def test_streaming_policy_trainer_flushes_on_gradient_count():
         policy_snapshot_id="snapshot-1",
     )
 
-    first = await trainer.submit_rollout(rollout1)
-    assert first is None
-    assert await trainer.get_buffered_gradient_count() == 1
-
-    second = await trainer.submit_rollout(rollout2)
-    assert second is not None
+    first, second = await asyncio.gather(
+        trainer.submit_rollout(rollout1),
+        trainer.submit_rollout(rollout2),
+    )
+    assert first is second
     assert second.metadata["flush_reason"] == "count"
     assert second.metadata["gradient_count"] == 2
     assert second.apply_result.updated_policy_set.policies[0].version == 2
@@ -491,12 +490,9 @@ async def test_streaming_policy_trainer_flushes_on_timer():
     )
 
     result = await trainer.submit_rollout(rollout)
-    assert result is None
-    for _ in range(20):
-        if trainer.last_apply_result is not None:
-            break
-        await asyncio.sleep(0.01)
-
+    assert result is not None
+    assert result.metadata["flush_reason"] == "time"
+    assert result.metadata["gradient_count"] == 1
     assert trainer.last_apply_result is not None
     assert trainer.last_apply_result.updated_policy_set.policies[0].version == 2
     assert await trainer.get_buffered_gradient_count() == 0
@@ -518,8 +514,8 @@ async def test_streaming_policy_trainer_close_flushes_buffer_and_rejects_submit(
         context=PipelineContext(),
         config=StreamingPolicyTrainerConfig(
             max_gradients_per_update=10,
-            max_wait_seconds=60.0,
-            timer_check_interval_seconds=60.0,
+            max_wait_seconds=0.01,
+            timer_check_interval_seconds=0.01,
         ),
     )
     rollout = Rollout(
@@ -528,7 +524,8 @@ async def test_streaming_policy_trainer_close_flushes_buffer_and_rejects_submit(
         policy_snapshot_id="snapshot-1",
     )
 
-    assert await trainer.submit_rollout(rollout) is None
+    submit_task = asyncio.create_task(trainer.submit_rollout(rollout))
+    await asyncio.sleep(0)
     assert await trainer.get_buffered_gradient_count() == 1
 
     result = await trainer.close()
@@ -536,6 +533,7 @@ async def test_streaming_policy_trainer_close_flushes_buffer_and_rejects_submit(
     assert result is not None
     assert result.metadata["flush_reason"] == "close"
     assert result.metadata["gradient_count"] == 1
+    assert await submit_task is result
     assert trainer.closed is True
     assert await trainer.get_buffered_gradient_count() == 0
     assert trainer.last_apply_result is result.apply_result
