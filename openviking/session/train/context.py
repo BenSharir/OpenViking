@@ -23,7 +23,7 @@ class PipelineContext:
     optimization_context: Any = None
     apply_context: Any = None
     execution_metadata: dict[str, Any] = field(default_factory=dict)
-    max_iterations: int = 1
+    max_epochs: int = 1
 
 
 @dataclass(slots=True)

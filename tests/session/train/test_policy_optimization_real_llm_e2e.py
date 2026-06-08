@@ -46,7 +46,7 @@ def _init_real_llm_e2e_tracer():
 class RealRubricTrajectoryAnalyzer:
     """Evaluate a rollout with the real LLM and emit one trajectory for training.
 
-    This keeps the train pipeline shape as one native iteration:
+    This keeps the train pipeline shape as one native epoch:
     rollout -> evaluation/trajectory extraction -> gradient -> plan -> apply.
     """
 
@@ -458,7 +458,7 @@ def _print_iterative_real_llm_summary(
     lines = [
         "\n========== Real LLM Iterative Policy Optimization =========",
         f"[TraceID] {tracer.get_trace_id()}",
-        f"iterations: {len(result.iterations)}",
+        f"epochs: {len(result.epochs)}",
         f"final_evaluation_score: {final_evaluation.metadata.get('score')}",
         f"first_score: {result.metadata.get('first_score')}",
         f"final_score: {result.metadata.get('final_score')}",
@@ -466,23 +466,23 @@ def _print_iterative_real_llm_summary(
         f"last_optimizer: {result.plan.metadata.get('optimizer')}",
         f"last_merge_errors: {result.plan.metadata.get('merge_errors')}",
     ]
-    for iteration in result.iterations:
+    for epoch in result.epochs:
         lines.extend(
             [
                 "",
-                f"[Iteration {iteration.iteration}]",
-                f"score: {iteration.metadata.get('score')}",
-                f"snapshot_ids: {iteration.policy_snapshot_ids}",
-                f"gradient_count: {iteration.metadata.get('gradient_count')}",
-                f"written_uris: {iteration.apply_result.written_uris}",
-                f"errors: {iteration.apply_result.errors}",
+                f"[Epoch {epoch.epoch}]",
+                f"score: {epoch.metadata.get('score')}",
+                f"snapshot_ids: {epoch.policy_snapshot_ids}",
+                f"gradient_count: {epoch.metadata.get('gradient_count')}",
+                f"written_uris: {epoch.apply_result.written_uris}",
+                f"errors: {epoch.apply_result.errors}",
             ]
         )
-        if iteration.gradients:
-            for gradient_idx, gradient in enumerate(iteration.gradients):
+        if epoch.gradients:
+            for gradient_idx, gradient in enumerate(epoch.gradients):
                 lines.extend(
                     [
-                        f"[Iteration {iteration.iteration} Gradient {gradient_idx}]",
+                        f"[Epoch {epoch.epoch} Gradient {gradient_idx}]",
                         f"target_experience_name: {gradient.target_experience_name}",
                         f"target_experience_uri: {gradient.target_experience_uri}",
                         f"confidence: {gradient.confidence}",
@@ -494,7 +494,7 @@ def _print_iterative_real_llm_summary(
                         gradient.after_file.plain_content(),
                     ]
                 )
-        for analysis in iteration.analyses:
+        for analysis in epoch.analyses:
             messages = analysis.metadata.get("rollout_messages", [])
             assistant_text = "\n".join(
                 message.content for message in messages if message.role == "assistant"
@@ -511,7 +511,7 @@ def _print_iterative_real_llm_summary(
     lines.extend(
         [
             "",
-            f"[Final Evaluation {final_evaluation.iteration}]",
+            f"[Final Evaluation {final_evaluation.epoch}]",
             f"score: {final_evaluation.metadata.get('score')}",
             f"snapshot_ids: {final_evaluation.policy_snapshot_ids}",
         ]
@@ -647,7 +647,7 @@ async def _run_policy_optimization_pipeline_real_config_llm_e2e_writes_updated_e
             ),
             optimization_context=PatchMergePolicyOptimizerContext(request_context=request_context),
             apply_context=request_context,
-            max_iterations=4,
+            max_epochs=4,
         ),
     )
     final_evaluation = await pipeline.eval(
@@ -655,7 +655,7 @@ async def _run_policy_optimization_pipeline_real_config_llm_e2e_writes_updated_e
         policy_set=result.apply_result.updated_policy_set,
         context=PipelineContext(
             analysis_context=TrajectoryAnalyzerContext(request_context=request_context),
-            execution_metadata={"iteration": 4},
+            execution_metadata={"epoch": 4},
         ),
     )
 
@@ -672,20 +672,20 @@ async def _run_policy_optimization_pipeline_real_config_llm_e2e_writes_updated_e
     assert assistant_text.strip()
     assert trajectory_content.strip()
     assert gradient.after_file.plain_content().strip()
-    assert all(iteration.apply_result.errors == [] for iteration in result.iterations)
+    assert all(epoch.apply_result.errors == [] for epoch in result.epochs)
     written_uris = [
-        uri for iteration in result.iterations for uri in iteration.apply_result.written_uris
+        uri for epoch in result.epochs for uri in epoch.apply_result.written_uris
     ]
     assert experience_uri in written_uris
     assert result.plan.metadata["optimizer"] == "patch_merge"
     assert any(
-        iteration.plan.metadata.get("optimizer") == "patch_merge" for iteration in result.iterations
+        epoch.plan.metadata.get("optimizer") == "patch_merge" for epoch in result.epochs
     )
-    assert len(result.iterations) == 4
+    assert len(result.epochs) == 4
     assert result.evaluation_passes == []
     assert final_evaluation.metadata["score"] > result.metadata["first_score"]
     assert result.metadata["score_delta"] > 0
-    assert len({iteration.metadata["score"] for iteration in result.iterations}) >= 3
+    assert len({epoch.metadata["score"] for epoch in result.epochs}) >= 3
     assert "重复" in fs.files[experience_uri]
     assert "房型" in fs.files[experience_uri]
     assert "确认" in fs.files[experience_uri]

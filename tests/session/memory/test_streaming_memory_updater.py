@@ -12,19 +12,22 @@ from openviking.message import Message, TextPart
 from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import (
     MemoryField,
+    MemoryFile,
     MemoryTypeSchema,
     ResolvedOperation,
     ResolvedOperations,
     StoredLink,
 )
+from openviking.session.memory.memory_updater import ExtractContext
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
-from openviking.session.memory.merge_op.base import FieldType, MergeOp
+from openviking.session.memory.merge_op.base import FieldType, MergeOp, SearchReplaceBlock, StrPatch
 from openviking.session.memory.streaming_memory_updater import (
     MemoryUpdateRequest,
     StreamingMemoryUpdater,
     StreamingMemoryUpdaterConfig,
     classify_memory_merge_mode,
     merge_one_memory_type_operations,
+    operation_to_patch,
 )
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -158,6 +161,32 @@ def _note_op_with_source(name: str, extraction_id: str) -> ResolvedOperation:
     op = _note_op(name)
     op.memory_fields["source_extraction_id"] = extraction_id
     return op
+
+
+def test_operation_to_patch_omits_raw_operation_metadata():
+    schema = _registry().get("notes")
+    old_file = MemoryFile(
+        uri="viking://user/u/memories/notes/note.md",
+        content="old content",
+        memory_type="notes",
+        extra_fields={"note_name": "note"},
+    )
+    op = ResolvedOperation(
+        old_memory_file_content=old_file,
+        memory_type="notes",
+        uris=["viking://user/u/memories/notes/note.md"],
+        memory_fields={
+            "note_name": "note",
+            "content": StrPatch(
+                blocks=[SearchReplaceBlock(search="old content", replace="new content")]
+            ),
+        },
+    )
+
+    patch = operation_to_patch(op, schema=schema, extract_context=ExtractContext([]))
+
+    assert patch.metadata == {}
+    assert patch.after_file.content == "new content"
 
 
 @pytest.mark.asyncio

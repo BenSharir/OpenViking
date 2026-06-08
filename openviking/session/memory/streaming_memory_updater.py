@@ -682,10 +682,6 @@ def operation_to_patch(
     return PatchMergePatch(
         before_file=old_file,
         after_file=after_file,
-        metadata={
-            "memory_type": op.memory_type,
-            "memory_fields": dict(getattr(op, "memory_fields", {}) or {}),
-        },
     )
 
 

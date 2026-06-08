@@ -9,8 +9,8 @@ from typing import Any
 from openviking.session.train.context import ExecutionContext, PipelineContext
 from openviking.session.train.domain import (
     ExperienceSet,
+    PipelineEpochResult,
     PipelineEvaluationResult,
-    PipelineIterationResult,
     PipelineResult,
     PolicyApplyResult,
     PolicyUpdatePlan,
@@ -76,39 +76,39 @@ class OfflinePolicyOptimizationPipeline:
         context: PipelineContext | Any,
     ) -> PipelineResult:
         ctx = context if isinstance(context, PipelineContext) else PipelineContext()
-        max_iterations = max(1, int(ctx.max_iterations or 1))
+        max_epochs = max(1, int(ctx.max_epochs or 1))
         current_policy_set = policy_set
-        iteration_results: list[PipelineIterationResult] = []
+        epoch_results: list[PipelineEpochResult] = []
 
-        for iteration in range(max_iterations):
-            iteration_result = await self._run_training_iteration(
-                iteration=iteration,
+        for epoch in range(max_epochs):
+            epoch_result = await self._run_training_epoch(
+                epoch=epoch,
                 case_loader=case_loader,
                 policy_set=current_policy_set,
                 ctx=ctx,
             )
-            iteration_results.append(iteration_result)
-            current_policy_set = iteration_result.apply_result.updated_policy_set
+            epoch_results.append(epoch_result)
+            current_policy_set = epoch_result.apply_result.updated_policy_set
 
         all_analyses = [
-            analysis for iteration in iteration_results for analysis in iteration.analyses
+            analysis for epoch in epoch_results for analysis in epoch.analyses
         ]
         all_gradients: list[SemanticGradient] = [
-            gradient for iteration in iteration_results for gradient in iteration.gradients
+            gradient for epoch in epoch_results for gradient in epoch.gradients
         ]
 
-        if iteration_results:
-            last_plan = iteration_results[-1].plan
-            last_apply_result = iteration_results[-1].apply_result
+        if epoch_results:
+            last_plan = epoch_results[-1].plan
+            last_apply_result = epoch_results[-1].apply_result
         else:
             last_plan = PolicyUpdatePlan(metadata={"empty": True})
             last_apply_result = PolicyApplyResult(updated_policy_set=current_policy_set)
 
-        first_score = _first_analysis_score(iteration_results)
-        final_score = _final_analysis_score(iteration_results)
+        first_score = _first_epoch_score(epoch_results)
+        final_score = _final_epoch_score(epoch_results)
         metadata: dict[str, Any] = {
             "policy_set_root_uri": current_policy_set.root_uri,
-            "max_iterations": max_iterations,
+            "max_epochs": max_epochs,
         }
         if first_score is not None:
             metadata["first_score"] = first_score
@@ -122,7 +122,7 @@ class OfflinePolicyOptimizationPipeline:
             gradients=list(all_gradients),
             plan=last_plan,
             apply_result=last_apply_result,
-            iterations=iteration_results,
+            epochs=epoch_results,
             evaluation_passes=[],
             metadata=metadata,
         )
@@ -136,7 +136,7 @@ class OfflinePolicyOptimizationPipeline:
     ) -> PipelineEvaluationResult:
         ctx = context if isinstance(context, PipelineContext) else PipelineContext()
         return await self._run_evaluation_pass(
-            iteration=int(ctx.execution_metadata.get("iteration", 0) or 0),
+            epoch=int(ctx.execution_metadata.get("epoch", 0) or 0),
             case_loader=case_loader,
             policy_set=policy_set,
             ctx=ctx,
@@ -175,14 +175,14 @@ class OfflinePolicyOptimizationPipeline:
         result.metadata["source"] = "external_rollouts"
         return result
 
-    async def _run_training_iteration(
+    async def _run_training_epoch(
         self,
         *,
-        iteration: int,
+        epoch: int,
         case_loader: CaseLoader,
         policy_set: ExperienceSet,
         ctx: PipelineContext,
-    ) -> PipelineIterationResult:
+    ) -> PipelineEpochResult:
         all_analyses: list[RolloutAnalysis] = []
         all_gradients: list[SemanticGradient] = []
         last_plan: PolicyUpdatePlan | None = None
@@ -195,7 +195,7 @@ class OfflinePolicyOptimizationPipeline:
                 cases=cases,
                 policy_set=current_policy_set,
                 ctx=ctx,
-                iteration=iteration,
+                epoch=epoch,
                 training=True,
             )
             snapshot_ids.append(snapshot_id)
@@ -216,11 +216,11 @@ class OfflinePolicyOptimizationPipeline:
             current_policy_set = last_apply_result.updated_policy_set
 
         if last_plan is None or last_apply_result is None:
-            last_plan = PolicyUpdatePlan(metadata={"empty": True, "iteration": iteration})
+            last_plan = PolicyUpdatePlan(metadata={"empty": True, "epoch": epoch})
             last_apply_result = PolicyApplyResult(updated_policy_set=current_policy_set)
 
-        return PipelineIterationResult(
-            iteration=iteration,
+        return PipelineEpochResult(
+            epoch=epoch,
             analyses=all_analyses,
             gradients=list(all_gradients),
             plan=last_plan,
@@ -236,7 +236,7 @@ class OfflinePolicyOptimizationPipeline:
     async def _run_evaluation_pass(
         self,
         *,
-        iteration: int,
+        epoch: int,
         case_loader: CaseLoader,
         policy_set: ExperienceSet,
         ctx: PipelineContext,
@@ -249,14 +249,14 @@ class OfflinePolicyOptimizationPipeline:
                 cases=cases,
                 policy_set=policy_set,
                 ctx=ctx,
-                iteration=iteration,
+                epoch=epoch,
                 training=False,
             )
             snapshot_ids.append(snapshot_id)
             all_analyses.extend(analyses)
 
         return PipelineEvaluationResult(
-            iteration=iteration,
+            epoch=epoch,
             analyses=all_analyses,
             policy_snapshot_ids=snapshot_ids,
             metadata={
@@ -272,7 +272,7 @@ class OfflinePolicyOptimizationPipeline:
         cases,
         policy_set: ExperienceSet,
         ctx: PipelineContext,
-        iteration: int,
+        epoch: int,
         training: bool,
     ) -> tuple[list[RolloutAnalysis], str]:
         snapshot_id = await self.snapshotter.snapshot(
@@ -281,7 +281,7 @@ class OfflinePolicyOptimizationPipeline:
         )
         execution_metadata = {
             **dict(ctx.execution_metadata),
-            "iteration": iteration,
+            "epoch": epoch,
             "training": training,
         }
         execution_context = ExecutionContext(
@@ -303,19 +303,19 @@ def _average_score(analyses: list[RolloutAnalysis]) -> float | None:
     return sum(float(analysis.evaluation.score) for analysis in analyses) / len(analyses)
 
 
-def _first_analysis_score(iterations: list[PipelineIterationResult]) -> float | None:
-    for iteration in iterations:
-        score = _average_score(iteration.analyses)
+def _first_epoch_score(epochs: list[PipelineEpochResult]) -> float | None:
+    for epoch in epochs:
+        score = _average_score(epoch.analyses)
         if score is not None:
             return score
     return None
 
 
-def _final_analysis_score(
-    iterations: list[PipelineIterationResult],
+def _final_epoch_score(
+    epochs: list[PipelineEpochResult],
 ) -> float | None:
-    for iteration in reversed(iterations):
-        score = _average_score(iteration.analyses)
+    for epoch in reversed(epochs):
+        score = _average_score(epoch.analyses)
         if score is not None:
             return score
     return None

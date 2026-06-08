@@ -231,16 +231,16 @@ class PolicyApplyResult:
 
 
 @dataclass(slots=True)
-class PipelineIterationResult:
-    """Result of one rollout/evaluate/train iteration.
+class PipelineEpochResult:
+    """Result of one rollout/evaluate/train epoch.
 
-    One iteration runs the current policy snapshot on case batches, analyzes the
+    One epoch runs the current policy snapshot on case batches, analyzes the
     resulting rollouts, estimates semantic gradients, plans a policy update, and
     applies it.  Repeating this structure models the offline equivalent of
     rollout -> evaluation -> update -> rollout -> evaluation.
     """
 
-    iteration: int
+    epoch: int
     analyses: list[RolloutAnalysis]
     gradients: list[Any]
     plan: PolicyUpdatePlan
@@ -257,7 +257,7 @@ class PipelineEvaluationResult:
     intentionally does not include gradients or policy updates.
     """
 
-    iteration: int
+    epoch: int
     analyses: list[RolloutAnalysis]
     policy_snapshot_ids: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -271,7 +271,7 @@ class PipelineResult:
     gradients: list[Any]
     plan: PolicyUpdatePlan
     apply_result: PolicyApplyResult
-    iterations: list[PipelineIterationResult] = field(default_factory=list)
+    epochs: list[PipelineEpochResult] = field(default_factory=list)
     evaluation_passes: list[PipelineEvaluationResult] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -281,7 +281,7 @@ class RolloutTrainingResult:
     """Result of training directly from externally produced rollouts.
 
     This is the online/realtime counterpart of one offline pipeline training
-    iteration.  The caller owns rollout execution; the training framework owns
+    epoch.  The caller owns rollout execution; the training framework owns
     analysis, gradient estimation, policy planning, and policy update.
     """
 

@@ -156,11 +156,11 @@ class DummyAnalyzer:
 
     async def analyze(self, rollout: Rollout, context: Any) -> RolloutAnalysis:
         self.calls.append(rollout)
-        iteration = int(rollout.policy_snapshot_id.removeprefix("snapshot-")) - 1
+        epoch = int(rollout.policy_snapshot_id.removeprefix("snapshot-")) - 1
         return RolloutAnalysis(
             evaluation=RubricEvaluation(
                 passed=True,
-                score=float(iteration),
+                score=float(epoch),
                 criterion_results=[],
                 feedback=[],
             ),
@@ -265,9 +265,9 @@ async def test_default_policy_optimization_pipeline_runs_one_batch():
         "viking://user/u/memories/experiences/booking_duplicate_handling.md"
     ]
     assert initial_policy_set.viking_fs.reloads == 1
-    assert len(result.iterations) == 1
-    assert result.iterations[0].iteration == 0
-    assert result.iterations[0].policy_snapshot_ids == ["snapshot-1"]
+    assert len(result.epochs) == 1
+    assert result.epochs[0].epoch == 0
+    assert result.epochs[0].policy_snapshot_ids == ["snapshot-1"]
 
 
 @pytest.mark.asyncio
@@ -286,26 +286,26 @@ async def test_offline_policy_optimization_pipeline_supports_train_and_eval():
     before_eval = await pipeline.eval(
         case_loader=ListCaseLoader([_case()]),
         policy_set=policy_set,
-        context=PipelineContext(execution_metadata={"iteration": -1}),
+        context=PipelineContext(execution_metadata={"epoch": -1}),
     )
     result = await pipeline.train(
         case_loader=ListCaseLoader([_case()]),
         policy_set=policy_set,
-        context=PipelineContext(max_iterations=2),
+        context=PipelineContext(max_epochs=2),
     )
     after_eval = await pipeline.eval(
         case_loader=ListCaseLoader([_case()]),
         policy_set=result.apply_result.updated_policy_set,
-        context=PipelineContext(execution_metadata={"iteration": 2}),
+        context=PipelineContext(execution_metadata={"epoch": 2}),
     )
 
-    assert before_eval.iteration == -1
+    assert before_eval.epoch == -1
     assert before_eval.metadata["score"] == 0.0
-    assert [item.iteration for item in result.iterations] == [0, 1]
+    assert [item.epoch for item in result.epochs] == [0, 1]
     assert result.evaluation_passes == []
-    assert result.iterations[0].metadata["score"] == 1.0
-    assert result.iterations[1].metadata["score"] == 2.0
-    assert after_eval.iteration == 2
+    assert result.epochs[0].metadata["score"] == 1.0
+    assert result.epochs[1].metadata["score"] == 2.0
+    assert after_eval.epoch == 2
     assert after_eval.metadata["score"] == 3.0
     assert result.metadata["first_score"] == 1.0
     assert result.metadata["final_score"] == 2.0
