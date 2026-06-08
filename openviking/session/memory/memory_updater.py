@@ -676,9 +676,8 @@ class MemoryUpdater:
         # Also skip URIs that were deleted in the same batch
         uris_to_vectorize = []
         deleted_set = set(result.deleted_uris)
-        deleted_keys = {_same_batch_delete_conflict_key(uri) for uri in deleted_set}
         for uri in result.written_uris + result.edited_uris:
-            if uri in deleted_set or _same_batch_delete_conflict_key(uri) in deleted_keys:
+            if uri in deleted_set:
                 continue
             if not uri.endswith("/.overview.md") and not uri.endswith("/.abstract.md"):
                 uris_to_vectorize.append(uri)

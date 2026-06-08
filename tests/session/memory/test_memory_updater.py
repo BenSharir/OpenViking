@@ -365,33 +365,6 @@ class TestMemoryUpdater:
         updater._apply_delete.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_vectorize_skips_case_only_deleted_uri(self):
-        registry = MagicMock()
-        updater = MemoryUpdater(registry=registry, vikingdb=MagicMock())
-        updater._viking_fs = MagicMock()
-        updater._viking_fs.read_file = AsyncMock(
-            side_effect=AssertionError("case-only deleted URI should not be vectorized")
-        )
-        updater._vikingdb.enqueue_embedding_msg = AsyncMock(return_value=True)
-
-        result = MemoryUpdateResult()
-        result.add_written("viking://user/alice/memories/entities/person/melanie.md")
-        result.add_deleted("viking://user/alice/memories/entities/person/Melanie.md")
-        ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
-
-        await updater._vectorize_memories(
-            result,
-            ctx,
-            extract_context=None,
-            uri_memory_type_map={
-                "viking://user/alice/memories/entities/person/melanie.md": "entities"
-            },
-        )
-
-        updater._viking_fs.read_file.assert_not_awaited()
-        updater._vikingdb.enqueue_embedding_msg.assert_not_awaited()
-
-    @pytest.mark.asyncio
     async def test_apply_operations_routes_backlinks_to_matching_uri_only(self):
         caroline_uri = (
             "viking://user/Caroline/memories/events/2023/05/08/career_education_planning.md"
