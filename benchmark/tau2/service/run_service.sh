@@ -10,6 +10,7 @@ PORT="1944"
 DATA_ROOT="${TAU2_DATA_ROOT:-}"
 CONFIG="${OPENVIKING_CONFIG_FILE:-${HOME}/.openviking/ov.conf}"
 KILL_EXISTING=1
+ROLLOUT_LANGUAGE="default"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -17,6 +18,7 @@ while [[ $# -gt 0 ]]; do
     --port) PORT="$2"; shift 2 ;;
     --data-root) DATA_ROOT="$2"; shift 2 ;;
     --config) CONFIG="$2"; shift 2 ;;
+    --rollout-language) ROLLOUT_LANGUAGE="$2"; shift 2 ;;
     --no-kill-existing) KILL_EXISTING=0; shift 1 ;;
     -h|--help)
       cat <<'EOF'
@@ -26,12 +28,19 @@ Usage:
 Options:
   --data-root PATH   tau2-bench data/tau2 root. Default auto-detect/TAU2_DATA_ROOT
   --config PATH      ov.conf for VikingBot/OpenViking access. Default ~/.openviking/ov.conf
+  --rollout-language default|zh
+                     Rollout response language. Use zh for Chinese user-facing replies.
   --no-kill-existing Do not stop existing process listening on --port
 EOF
       exit 0 ;;
     *) echo "Unknown argument: $1" >&2; exit 1 ;;
   esac
 done
+
+if [[ "${ROLLOUT_LANGUAGE}" != "default" && "${ROLLOUT_LANGUAGE}" != "zh" ]]; then
+  echo "[tau2-service] invalid --rollout-language: ${ROLLOUT_LANGUAGE}. Expected default or zh" >&2
+  exit 1
+fi
 
 if [[ -z "${DATA_ROOT}" ]]; then
   for _candidate in \
@@ -64,7 +73,7 @@ export OPENAI_API_KEY="${OPENAI_API_KEY:-${ARK_API_KEY:-}}"
 export OPENAI_API_BASE="${OPENAI_API_BASE:-https://ark.cn-beijing.volces.com/api/v3}"
 
 cd "${REPO_ROOT}"
-echo "[tau2-service] host=${HOST} port=${PORT} data_root=${DATA_ROOT} config=${CONFIG}"
+echo "[tau2-service] host=${HOST} port=${PORT} data_root=${DATA_ROOT} config=${CONFIG} rollout_language=${ROLLOUT_LANGUAGE}"
 if [[ "${KILL_EXISTING}" == "1" ]]; then
   EXISTING_PIDS="$(lsof -tiTCP:"${PORT}" -sTCP:LISTEN 2>/dev/null || true)"
   if [[ -n "${EXISTING_PIDS}" ]]; then
@@ -83,4 +92,4 @@ if [[ "${KILL_EXISTING}" == "1" ]]; then
     fi
   fi
 fi
-exec "${PYTHON_BIN}" "${SCRIPT_DIR}/app.py" --host "${HOST}" --port "${PORT}" --data-root "${DATA_ROOT}" --config "${CONFIG}"
+exec "${PYTHON_BIN}" "${SCRIPT_DIR}/app.py" --host "${HOST}" --port "${PORT}" --data-root "${DATA_ROOT}" --config "${CONFIG}" --rollout-language "${ROLLOUT_LANGUAGE}"

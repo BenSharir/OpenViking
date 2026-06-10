@@ -600,3 +600,57 @@ async def test_get_streaming_policy_trainer_returns_process_global_instance():
 
     assert second is first
     assert first.config.max_gradients_per_update == 3
+
+class FakeSessionCommitClient:
+    def __init__(self):
+        self.created_sessions = []
+        self.messages = {}
+        self.committed_sessions = []
+
+    async def create_session(self, *, session_id, memory_policy=None):
+        self.created_sessions.append((session_id, memory_policy))
+
+    async def batch_add_messages(self, session_id, messages):
+        self.messages[session_id] = messages
+
+    async def commit_session(self, session_id, *, keep_recent_count=0):
+        self.committed_sessions.append((session_id, keep_recent_count))
+        return {"task_id": f"task-{session_id}", "trace_id": f"trace-{session_id}"}
+
+    async def get_task(self, task_id):
+        return {"task_id": task_id, "status": "completed", "result": {}}
+
+
+@pytest.mark.asyncio
+async def test_session_commit_policy_trainer_records_commit_trace_id():
+    from openviking.session.train import SessionCommitPolicyTrainer
+
+    client = FakeSessionCommitClient()
+    trainer = SessionCommitPolicyTrainer(
+        client=client,
+        run_id="run1",
+        keep_recent_count=2,
+        poll_interval_seconds=0.01,
+    )
+    case = _case()
+    rollout = Rollout(
+        case=case,
+        messages=[Message(id="m1", role="user", parts=[TextPart(text="hello")])],
+        policy_snapshot_id="snapshot-1",
+        evaluation=RubricEvaluation(passed=True, score=1.0, criterion_results=[], feedback=[]),
+        metadata={"data_split": "unit", "task_no": 7, "execution_metadata": {"epoch": 3}},
+    )
+
+    result = await trainer.train_rollouts([rollout], _policy_set())
+
+    commit_result = result.apply_result.metadata["commit_results"][0]
+    assert commit_result["task_id"] == f"task-{commit_result['session_id']}"
+    assert commit_result["trace_id"] == f"trace-{commit_result['session_id']}"
+    assert commit_result["task_status"] == "completed"
+    assert client.committed_sessions == [(commit_result["session_id"], 2)]
+    assert client.created_sessions == [
+        (
+            commit_result["session_id"],
+            {"memory_types": ["cases", "trajectories", "experiences"]},
+        )
+    ]

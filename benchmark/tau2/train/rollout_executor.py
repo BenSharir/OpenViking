@@ -116,6 +116,11 @@ class Tau2RolloutExecutor:
     keep_default_tools: bool = True
     max_iterations: int = 30
     log_timings: bool = True
+    rollout_language: str = "default"
+
+    def __post_init__(self) -> None:
+        if self.rollout_language not in {"default", "zh"}:
+            raise ValueError("rollout_language must be 'default' or 'zh'")
 
     async def execute(
         self,
@@ -170,6 +175,7 @@ class Tau2RolloutExecutor:
         system_prompt = _build_system_prompt(
             provider.policy,
             keep_default_tools=self.keep_default_tools,
+            rollout_language=self.rollout_language,
         )
         user_prompt = provider.user_query
         SessionKey = _vikingbot_imports()["SessionKey"]
@@ -301,7 +307,7 @@ def _configure_tools(
         )
 
 
-def _build_system_prompt(policy: str, *, keep_default_tools: bool) -> str:
+def _build_system_prompt(policy: str, *, keep_default_tools: bool, rollout_language: str) -> str:
     instructions = []
     if policy:
         instructions.append(policy)
@@ -310,6 +316,12 @@ def _build_system_prompt(policy: str, *, keep_default_tools: bool) -> str:
         instructions.append(
             "Before you attend to customer, you MUST read relevant agent memory that stores "
             "experiences distilled from similar tasks and carefully learn them."
+        )
+    if rollout_language == "zh":
+        instructions.append(
+            "Communicate with the user and write the final response in Chinese. "
+            "Do not translate tool names, identifiers, JSON field names, reservation IDs, "
+            "flight numbers, or other structured values used by tools."
         )
     instructions.append(
         "If you need to communicate with the user, you MUST call tool `communicate_with_user`."
@@ -451,8 +463,11 @@ def _build_rollout_messages(
                         id=f"tau2-tool-call-{idx}",
                         role="assistant",
                         parts=[
-                            TextPart(
-                                text=f"tool-call:\nname: {tool_name}\narguments: {_stringify(args)}"
+                            ToolPart(
+                                tool_id=f"tau2-tool-{idx}",
+                                tool_name=str(tool_name),
+                                tool_input=_as_tool_input(args),
+                                tool_status="running",
                             )
                         ],
                     )
@@ -492,6 +507,16 @@ def _message(message_id: str, role: str, text: str) -> Message:
 def _as_tool_input(args: Any) -> dict[str, Any]:
     if isinstance(args, dict):
         return args
+    if isinstance(args, str):
+        import json
+
+        try:
+            parsed = json.loads(args)
+        except json.JSONDecodeError:
+            return {"arguments": args}
+        if isinstance(parsed, dict):
+            return parsed
+        return {"arguments": parsed}
     return {"arguments": args}
 
 

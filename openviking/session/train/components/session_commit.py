@@ -24,6 +24,8 @@ from openviking.session.train.domain import (
 )
 from openviking_cli.client.http import AsyncHTTPClient
 
+_TRAINING_COMMIT_MEMORY_TYPES = ("cases", "trajectories", "experiences")
+
 
 @dataclass(slots=True)
 class SessionCommitPolicyTrainer:
@@ -55,7 +57,7 @@ class SessionCommitPolicyTrainer:
         context: PipelineContext | Any = None,
         analyses: list[RolloutAnalysis] | None = None,
     ) -> RolloutTrainingResult:
-        ctx = context if isinstance(context, PipelineContext) else None
+        del context
         rollout_list = list(rollouts)
         _validate_rollouts_have_cases(rollout_list)
         if analyses is not None and len(analyses) != len(rollout_list):
@@ -64,7 +66,7 @@ class SessionCommitPolicyTrainer:
             )
         progress = ProgressPrinter(
             total=len(rollout_list),
-            label=_commit_progress_label(self.progress_label, ctx),
+            label=self.progress_label,
             enabled=self.show_progress,
         )
         progress.render()
@@ -73,10 +75,11 @@ class SessionCommitPolicyTrainer:
 
         async def commit_one(rollout: Rollout, idx: int) -> dict[str, Any]:
             async with semaphore:
+                progress.start_one()
                 try:
                     return await self._commit_one(rollout, idx)
                 finally:
-                    progress.advance()
+                    progress.complete_one()
 
         try:
             commit_results = await asyncio.gather(
@@ -123,7 +126,10 @@ class SessionCommitPolicyTrainer:
                 + [_message_to_request(message) for message in rollout.messages]
                 + [_evaluation_message_to_request(rollout)]
             )
-            await self.client.create_session(session_id=session_id)
+            await self.client.create_session(
+                session_id=session_id,
+                memory_policy=_training_commit_memory_policy(),
+            )
             await self.client.batch_add_messages(session_id, messages)
             commit_result = await self.client.commit_session(
                 session_id,
@@ -135,6 +141,7 @@ class SessionCommitPolicyTrainer:
                 "index": index,
                 "session_id": session_id,
                 "task_id": task_id,
+                "trace_id": commit_result.get("trace_id"),
                 "task_status": task.get("status") if isinstance(task, dict) else None,
                 "score": _rollout_score(rollout),
                 "error": _task_error(task),
@@ -144,6 +151,7 @@ class SessionCommitPolicyTrainer:
                 "index": index,
                 "session_id": session_id,
                 "task_id": "",
+                "trace_id": None,
                 "task_status": "failed",
                 "score": _rollout_score(rollout),
                 "error": str(exc),
@@ -160,13 +168,8 @@ class SessionCommitPolicyTrainer:
             await asyncio.sleep(self.poll_interval_seconds)
 
 
-def _commit_progress_label(default_label: str, context: PipelineContext | None) -> str:
-    if context is None:
-        return default_label
-    epoch = context.execution_metadata.get("epoch")
-    if epoch is None:
-        return default_label
-    return f"session-commit epoch={epoch}"
+def _training_commit_memory_policy() -> dict[str, Any]:
+    return {"memory_types": list(_TRAINING_COMMIT_MEMORY_TYPES)}
 
 
 def _analysis_from_rollout(rollout: Rollout) -> RolloutAnalysis:

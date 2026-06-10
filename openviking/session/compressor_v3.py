@@ -246,7 +246,7 @@ class SessionCompressorV3:
         return result.contexts
 
     @tracer(
-        "train.compressor_v3.extract_long_term_patch_merge", ignore_result=True, ignore_args=True
+        "train.compressor_v3.extract_user_memories", ignore_result=True, ignore_args=True
     )
     async def _extract_user_memories(
         self,

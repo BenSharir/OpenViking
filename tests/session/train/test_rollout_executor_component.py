@@ -112,3 +112,40 @@ def test_default_single_turn_prompt_contains_case_policy_and_rubric():
     assert "booking_policy v2 [production]" in prompt
     assert "cancel duplicate booking" in prompt
     assert "verify_duplicate" in prompt
+
+
+def test_tau2_rollout_messages_use_structured_tool_parts():
+    from benchmark.tau2.train.rollout_executor import _build_rollout_messages
+    from openviking.message import TextPart, ToolPart
+
+    rollout_messages = _build_rollout_messages(
+        system_prompt="policy",
+        user_prompt="user request",
+        tools_used=[
+            {
+                "tool_name": "get_user_details",
+                "args": '{"user_id": "emma_kim_9957"}',
+                "result": '{"membership": "gold"}',
+            }
+        ],
+        final_content="done",
+        evaluation_result=None,
+        reward=1.0,
+    )
+
+    tool_call_message = rollout_messages[2]
+    assert tool_call_message.role == "assistant"
+    assert isinstance(tool_call_message.parts[0], ToolPart)
+    assert tool_call_message.parts[0].tool_status == "running"
+    assert tool_call_message.parts[0].tool_input == {"user_id": "emma_kim_9957"}
+    assert not any(
+        isinstance(part, TextPart) and "tool-call:" in part.text
+        for message in rollout_messages
+        for part in message.parts
+    )
+
+    tool_result_message = rollout_messages[3]
+    assert tool_result_message.role == "user"
+    assert isinstance(tool_result_message.parts[0], ToolPart)
+    assert tool_result_message.parts[0].tool_status == "completed"
+    assert tool_result_message.parts[0].tool_output == '{"membership": "gold"}'

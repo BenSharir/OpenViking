@@ -98,15 +98,23 @@ class _RolloutExecutionStore:
             execution.updated_at = time.time()
 
 
-def create_app(*, data_root: str | None = None, config_path: str | None = None) -> FastAPI:
+def create_app(
+    *,
+    data_root: str | None = None,
+    config_path: str | None = None,
+    rollout_language: str = "default",
+) -> FastAPI:
+    if rollout_language not in {"default", "zh"}:
+        raise ValueError("rollout_language must be 'default' or 'zh'")
     app = FastAPI(title="OpenViking Tau2 Rollout Service")
     app.state.data_root = data_root
     app.state.config_path = config_path
+    app.state.rollout_language = rollout_language
     app.state.rollout_executions = _RolloutExecutionStore()
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
-        return {"status": "ok", "service": "tau2"}
+        return {"status": "ok", "service": "tau2", "rollout_language": app.state.rollout_language}
 
     @app.post("/v1/cases/query")
     async def query_cases(request: CasesQueryRequest) -> dict[str, Any]:
@@ -156,6 +164,7 @@ async def _run_rollout_execution(
             concurrency=1,
             keep_default_tools=bool(options.get("keep_default_tools", True)),
             max_iterations=int(options.get("max_iterations") or 30),
+            rollout_language=str(options.get("rollout_language") or app.state.rollout_language),
         )
         rollouts = await executor.execute(
             [_case_from_dict(request.case)],
@@ -279,6 +288,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--port", type=int, default=1944)
     parser.add_argument("--data-root", default=os.getenv("TAU2_DATA_ROOT"))
     parser.add_argument("--config", default=os.getenv("OPENVIKING_CONFIG_FILE"))
+    parser.add_argument("--rollout-language", choices=["default", "zh"], default="default")
     return parser.parse_args()
 
 
@@ -287,7 +297,11 @@ def main() -> None:
     import uvicorn
 
     uvicorn.run(
-        create_app(data_root=args.data_root, config_path=args.config),
+        create_app(
+            data_root=args.data_root,
+            config_path=args.config,
+            rollout_language=args.rollout_language,
+        ),
         host=args.host,
         port=args.port,
     )

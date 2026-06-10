@@ -150,7 +150,7 @@ async def run_tau2_batch_train_eval(config: Tau2BatchRunConfig) -> Tau2BatchRunR
             timeout_seconds=config.commit_timeout_seconds,
             commit_concurrency=config.commit_concurrency,
             show_progress=True,
-            progress_label="session-commit",
+            progress_label="train",
         )
         pipeline = _build_pipeline(config, policy_trainer)
 
@@ -254,7 +254,7 @@ def _build_pipeline(
             service_url=_require_benchmark_service_url(config),
             concurrency=config.concurrency,
             show_progress=True,
-            progress_label="tau2-rollout",
+            progress_label="rollout",
             options={
                 "config_path": config.config_path,
                 "keep_default_tools": config.keep_default_tools,
@@ -327,6 +327,7 @@ def _evaluation_report(result: PipelineEvaluationResult) -> dict[str, Any]:
         "rewards": rewards,
         "snapshot_ids": list(result.policy_snapshot_ids),
         "metadata": dict(result.metadata),
+        "memory_usage": _memory_usage_from_analyses(result.analyses),
     }
 
 
@@ -354,7 +355,52 @@ def _train_result_report(result: PipelineResult, *, epoch: int) -> dict[str, Any
         "snapshot_ids": snapshot_ids,
         "commit_results": commit_results,
         "metadata": dict(result.metadata),
+        "memory_usage": _memory_usage_from_analyses(result.analyses),
     }
+
+
+def _memory_usage_from_analyses(analyses: list[RolloutAnalysis]) -> dict[str, Any]:
+    rollouts = [
+        rollout
+        for analysis in analyses
+        if isinstance((rollout := analysis.metadata.get("rollout")), Rollout)
+    ]
+    rollout_count = len(rollouts)
+    memory_context_count = 0
+    memory_tool_call_rollout_count = 0
+    memory_tool_call_total = 0
+    for rollout in rollouts:
+        metadata = rollout.metadata or {}
+        if str(metadata.get("memory") or "").strip():
+            memory_context_count += 1
+        tool_call_count = _memory_tool_call_count(metadata.get("tools_used"))
+        if tool_call_count:
+            memory_tool_call_rollout_count += 1
+            memory_tool_call_total += tool_call_count
+    return {
+        "rollout_count": rollout_count,
+        "memory_context_count": memory_context_count,
+        "memory_context_ratio": _ratio(memory_context_count, rollout_count),
+        "memory_tool_call_rollout_count": memory_tool_call_rollout_count,
+        "memory_tool_call_rollout_ratio": _ratio(
+            memory_tool_call_rollout_count,
+            rollout_count,
+        ),
+        "memory_tool_call_total": memory_tool_call_total,
+    }
+
+
+def _memory_tool_call_count(tools_used: Any) -> int:
+    if not isinstance(tools_used, list):
+        return 0
+    count = 0
+    for tool_info in tools_used:
+        if not isinstance(tool_info, dict):
+            continue
+        tool_name = str(tool_info.get("tool_name") or "")
+        if tool_name.startswith("openviking"):
+            count += 1
+    return count
 
 
 def _accuracy_delta(

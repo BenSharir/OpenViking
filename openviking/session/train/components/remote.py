@@ -130,7 +130,7 @@ class RemoteRolloutExecutor:
         case_list = list(cases)
         progress = ProgressPrinter(
             total=len(case_list),
-            label=_progress_label(self.progress_label, context.metadata),
+            label=self.progress_label,
             enabled=self.show_progress,
         )
         progress.render()
@@ -140,10 +140,11 @@ class RemoteRolloutExecutor:
 
             async def execute_one(case: Case) -> Rollout:
                 async with semaphore:
+                    progress.start_one()
                     try:
                         return await self._execute_one(client, case, policy_set, context)
                     finally:
-                        progress.advance()
+                        progress.complete_one()
 
             try:
                 return list(await asyncio.gather(*(execute_one(case) for case in case_list)))
@@ -202,13 +203,6 @@ class RemoteRolloutExecutor:
                     f"after {self.execution_timeout_seconds}s"
                 )
             await asyncio.sleep(self.poll_interval_seconds)
-
-
-def _progress_label(default_label: str, metadata: dict[str, Any]) -> str:
-    stage = metadata.get("stage")
-    if isinstance(stage, str) and stage:
-        return stage
-    return default_label
 
 
 def _remote_execution_options(options: dict[str, Any]) -> dict[str, Any]:
