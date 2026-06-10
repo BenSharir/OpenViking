@@ -1372,7 +1372,11 @@ class VikingFS:
         uri: str,
         ctx: Optional[RequestContext] = None,
     ) -> str:
-        """Read directory's L1 overview (.overview.md)."""
+        """Read directory's L1 overview (.overview.md).
+
+        If the caller points to a file, its parent directory is used instead so
+        the endpoint remains usable for both file and directory URIs.
+        """
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         try:
@@ -1383,10 +1387,14 @@ class VikingFS:
                 raise mapped from exc
             raise
         if not info.get("isDir", info.get("is_dir")):
-            raise FailedPreconditionError(
-                f"{uri} is not a directory",
-                details={"resource": uri, "expected": "directory"},
+            parent_path = path.rsplit("/", 1)[0] or "/"
+            parent_uri = self._path_to_uri(parent_path, ctx=ctx)
+            logger.info(
+                "content/overview: %s is a file, falling back to parent directory %s",
+                uri,
+                parent_uri,
             )
+            return await self.overview(parent_uri, ctx=ctx)
         file_path = f"{path}/.overview.md"
         try:
             content_bytes = self._handle_agfs_read(await self._async_agfs.read(file_path))
