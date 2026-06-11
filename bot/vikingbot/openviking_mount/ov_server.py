@@ -475,9 +475,6 @@ class VikingClient:
 
     async def read_user_profile(self, user_id: str) -> str:
         """读取用户 profile。"""
-        if user_id is None:
-            return await self.read_content(uri="viking://user/memories/profile.md", level="read")
-
         effective_user_id = self._effective_user_id(user_id)
         if not effective_user_id:
             return await self.read_content(uri="viking://user/memories/profile.md", level="read")

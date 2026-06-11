@@ -33,15 +33,13 @@ def _get_session_number(session_key: str) -> int:
 def build_memory_policy(group_chat: bool) -> Dict[str, Dict[str, bool]]:
     """Build session/commit memory policy for benchmark ingest.
 
-    LoCoMo eval isolates samples through OpenViking user id. In non-group mode,
-    messages are written to the sample user's self memory. In group-chat mode,
-    messages are written to speaker peers under the same sample user.
+    LoCoMo eval isolates samples through peer memory. In non-group mode the
+    peer is the sample_id (for example conv-26); in group mode the peer is the
+    speaker. Do not write benchmark memories into the current User self memory,
+    otherwise all samples imported by the same User API key become visible to
+    every question.
     """
-    if not group_chat:
-        return {
-            "self": {"enabled": True},
-            "peer": {"enabled": False},
-        }
+    del group_chat
     return {
         "self": {"enabled": False},
         "peer": {"enabled": True},
@@ -103,7 +101,7 @@ def build_session_messages(
 
     Args:
         group_chat: If True, use speaker names as peer_id.
-                    If False, store under the sample user and prefix speaker in text.
+                    If False, use sample_id as peer_id and prefix speaker in text.
     """
     conv = item["conversation"]
     sample_peer_id = item["sample_id"]
@@ -140,14 +138,14 @@ def build_session_messages(
                     }
                 )
             else:
-                # single-chat 模式下按 sample_id 对应的 OpenViking user 隔离，
-                # 不再传 peer_id；speaker 信息嵌入文本以保留说话人身份。
+                # single-chat 模式下按 sample_id 聚合 peer，
+                # speaker 信息嵌入文本以保留说话人身份
                 messages.append(
                     {
                         "role": "user",
                         "text": f"{speaker}: {text}",
                         "speaker": speaker,
-                        "peer_id": None,
+                        "peer_id": sample_peer_id,
                         "index": idx,
                     }
                 )
@@ -338,7 +336,6 @@ async def viking_ingest(
     account: str = "default",
     api_key: Optional[str] = None,
     group_chat: bool = False,
-    trusted_identity_user: Optional[str] = None,
 ) -> Dict[str, int]:
     """Save messages to OpenViking via OpenViking SDK client.
     Returns token usage dict with embedding and vlm token counts.
@@ -361,14 +358,12 @@ async def viking_ingest(
             print(f"Warning: Failed to parse session_time: {session_time}", file=sys.stderr)
 
     # Create client with 10-minute timeout
-    client_user = trusted_identity_user if trusted_identity_user is not None else user_id
     client = ov.AsyncHTTPClient(
         url=openviking_url,
-        user=client_user,
+        user=user_id,
         account=account,
         api_key=api_key,
         timeout=600,
-        profile_enabled=False,
     )
     await client.initialize()
     memory_policy = build_memory_policy(group_chat)
@@ -455,24 +450,14 @@ async def process_single_session(
     source_sample_id = str(sample_id)
     try:
         started_at = time.perf_counter()
-        if args.separate_user_by_sample:
-            user_id = source_sample_id
-            account = args.account
-            trusted_identity_user = None
-        elif args.trusted_identity_user is not None:
-            user_id = ""
-            account = args.account
-            trusted_identity_user = args.trusted_identity_user
-        elif args.api_key:
+        if args.api_key:
             # User API keys already pin account/user on the server side. Passing
             # account/user headers would be rejected in api_key auth mode.
             user_id = ""
             account = ""
-            trusted_identity_user = None
         else:
-            user_id = ""
-            account = ""
-            trusted_identity_user = None
+            user_id = str(sample_id) if args.separate_user_by_sample else ""
+            account = args.account if args.separate_user_by_sample else ""
         result = await viking_ingest(
             messages,
             args.openviking_url,
@@ -481,7 +466,6 @@ async def process_single_session(
             account=account,
             api_key=args.api_key,
             group_chat=args.group_chat,
-            trusted_identity_user=trusted_identity_user,
         )
         duration_seconds = round(time.perf_counter() - started_at, 3)
         token_usage = result["token_usage"]
@@ -700,8 +684,7 @@ async def run_import(args: argparse.Namespace) -> None:
                 total_vlm_tokens, \
                 total_cache_tokens, \
                 total_reasoning_tokens, \
-                total_llm_output_tokens, \
-                skipped_count
+                total_llm_output_tokens
             sample_id = item["sample_id"]
             display_id = f"sample_{sample_index}"
 
@@ -719,12 +702,14 @@ async def run_import(args: argparse.Namespace) -> None:
             print(f"\n=== Sample {display_id} ({sample_id}) ===", file=sys.stderr)
             print(f"    {len(sessions)} session(s) to import", file=sys.stderr)
 
-            async def import_one_session(sess):
+            # 同一 sample 内串行处理所有 sessions
+            for sess in sessions:
                 meta = sess["meta"]
                 messages = sess["messages"]
                 session_key = meta["session_key"]
                 label = f"{session_key} ({meta['date_time']})"
 
+                # Skip already ingested sessions unless force-ingest is enabled
                 if not args.force_ingest and is_already_ingested(
                     sample_id, session_key, ingest_record, success_keys
                 ):
@@ -732,13 +717,16 @@ async def run_import(args: argparse.Namespace) -> None:
                         f"  [{label}] [SKIP] already imported (use --force-ingest to reprocess)",
                         file=sys.stderr,
                     )
-                    return {"status": "skipped"}
+                    continue
 
+                # Preview messages
                 preview = " | ".join(
                     [f"{msg['role']}: {msg['text'][:30]}..." for msg in messages[:3]]
                 )
                 print(f"  [{label}] {preview}", file=sys.stderr)
-                return await process_single_session(
+
+                # 串行执行（等待完成后再处理下一个 session）
+                res = await process_single_session(
                     messages=messages,
                     sample_id=sample_id,
                     display_id=display_id,
@@ -748,32 +736,6 @@ async def run_import(args: argparse.Namespace) -> None:
                     ingest_record=ingest_record,
                     args=args,
                 )
-
-            if args.parallel_sessions:
-                print(
-                    f"    [parallel-sessions] concurrency={args.parallel_sessions}",
-                    file=sys.stderr,
-                )
-                session_semaphore = asyncio.Semaphore(args.parallel_sessions)
-
-                async def import_one_session_with_limit(sess):
-                    async with session_semaphore:
-                        return await import_one_session(sess)
-
-                session_results = await asyncio.gather(
-                    *[import_one_session_with_limit(sess) for sess in sessions],
-                    return_exceptions=True,
-                )
-            else:
-                session_results = []
-                for sess in sessions:
-                    session_results.append(await import_one_session(sess))
-
-            for res in session_results:
-                if isinstance(res, Exception):
-                    error_count += 1
-                    print(f"  [ERROR] parallel session task failed: {res}", file=sys.stderr)
-                    continue
                 if res.get("status") == "success":
                     success_count += 1
                     total_embedding_tokens += res.get("embedding_tokens", 0)
@@ -783,8 +745,6 @@ async def run_import(args: argparse.Namespace) -> None:
                     total_llm_output_tokens += res.get("llm_output_tokens", 0)
                 elif res.get("status") == "error":
                     error_count += 1
-                elif res.get("status") == "skipped":
-                    skipped_count += 1
 
         if args.parallel_samples:
             semaphore = asyncio.Semaphore(args.parallel_samples)
@@ -946,11 +906,6 @@ def main():
         help="OpenViking API key to pass to AsyncHTTPClient",
     )
     parser.add_argument(
-        "--trusted-identity-user",
-        default=None,
-        help="Trusted-mode OpenViking user header. Keeps benchmark sample isolation in peer_id instead of user_id.",
-    )
-    parser.add_argument(
         "--account",
         default="default",
         help="OpenViking account identifier (default: default)",
@@ -983,15 +938,6 @@ def main():
         type=int,
         default=None,
         help="Max number of samples to import concurrently. Default: no limit; create one task per sample.",
-    )
-    parser.add_argument(
-        "--parallel-sessions",
-        type=int,
-        default=0,
-        help=(
-            "Max number of sessions to import concurrently inside each sample. "
-            "Default: 0, keep sessions serial. Enable this to stress concurrent commit/add paths."
-        ),
     )
     parser.add_argument(
         "--force-ingest",

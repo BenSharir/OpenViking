@@ -149,6 +149,7 @@ class MemoryStore:
         self,
         current_message: str,
         workspace_id: str,
+        sender_id: str,
         peer_ids: list[str] | None = None,
         user_ids: list[str] | None = None,
         openviking_connection: dict[str, Any] | None = None,
@@ -162,6 +163,7 @@ class MemoryStore:
                 else config.admin_user_id
             )
             logger.info(f"workspace_id={workspace_id}")
+            logger.info(f"sender_id={sender_id}")
             logger.info(f"peer_ids={peer_ids}")
             logger.info(f"user_ids={user_ids}")
             logger.info(f"admin_user_id={admin_user_id}")
@@ -170,10 +172,11 @@ class MemoryStore:
                 agent_id=workspace_id,
                 connection=openviking_connection,
             )
+            search_peer_ids = [sender_id, *(peer_ids or [])] if sender_id else (peer_ids or None)
             result = await client.search_memory(
                 query=current_message,
                 user_ids=user_ids,
-                peer_ids=peer_ids,
+                peer_ids=search_peer_ids,
                 limit=10,
             )
             if not result:

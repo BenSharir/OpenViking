@@ -2,8 +2,8 @@ import argparse
 import csv
 import json
 import os
+import re
 import subprocess
-import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -241,81 +241,35 @@ def run_vikingbot_chat(
     question_id: str | None = None,
     config: str | None = None,
     memory_peer_ids: list[str] | None = None,
-    openviking_user: str | None = None,
-) -> tuple[str, dict, float, int, list]:
+) -> tuple[str, dict, float, int, list, str]:
     """执行vikingbot chat命令，返回回答、token使用情况、耗时（秒）、迭代次数、使用的工具列表"""
-    effective_config, temp_config = _config_for_openviking_user(config, openviking_user)
-    try:
-        return _run_vikingbot_chat_with_config(
-            question=question,
-            question_time=question_time,
-            sender_peer_id=sender_peer_id,
-            question_id=question_id,
-            config=effective_config,
-            memory_peer_ids=memory_peer_ids,
-        )
-    finally:
-        if temp_config:
-            try:
-                os.remove(temp_config)
-            except OSError:
-                pass
+    bot_log_file = build_bot_log_file(question_id)
+    env = os.environ.copy()
+    if bot_log_file:
+        env["VIKINGBOT_LOG_FILE"] = bot_log_file
 
-
-def _config_for_openviking_user(
-    config: str | None,
-    openviking_user: str | None,
-) -> tuple[str | None, str | None]:
-    if not config or not openviking_user:
-        return config, None
-
-    config_path = Path(config).expanduser()
-    if not config_path.exists():
-        return config, None
-
-    with open(config_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    bot = data.setdefault("bot", {})
-    ov_key = "ov_server" if "ov_server" in bot else "ovServer" if "ovServer" in bot else "ov_server"
-    ov_server = bot.setdefault(ov_key, {})
-    ov_server["admin_user_id"] = openviking_user
-    account = os.environ.get("ACCOUNT") or os.environ.get("OPENVIKING_ACCOUNT")
-    if account:
-        ov_server["account_id"] = account
-
-    fd, path = tempfile.mkstemp(prefix="locomo_ov_", suffix=".conf")
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-        f.write("\n")
-    return path, path
-
-
-def _run_vikingbot_chat_with_config(
-    question: str,
-    question_time: str | None = None,
-    sender_peer_id: str | None = None,
-    question_id: str | None = None,
-    config: str | None = None,
-    memory_peer_ids: list[str] | None = None,
-) -> tuple[str, dict, float, int, list]:
     # 先执行 /new 命令清除会话
-    if sender_peer_id or question_id:
+    if sender_peer_id:
         new_cmd = ["vikingbot", "chat"]
         if config:
             new_cmd.extend(["--config", config])
-        new_cmd.extend(["-m", "/new", "-e"])
-        if sender_peer_id:
-            new_cmd.extend(["--sender", sender_peer_id])
-            new_cmd.append("--sender-is-peer")
-        if question_id:
-            new_cmd.extend(["--session", question_id])
+        new_cmd.extend(
+            [
+                "-m",
+                "/new",
+                "-e",
+                "--sender",
+                sender_peer_id,
+                "--session",
+                question_id,
+            ]
+        )
         if memory_peer_ids:
             for peer_id in memory_peer_ids:
                 new_cmd.extend(["--memory-peer", peer_id])
         try:
             # print(f'new_cmd={new_cmd}')
-            subprocess.run(new_cmd, capture_output=True, text=True, timeout=300)
+            subprocess.run(new_cmd, capture_output=True, text=True, timeout=300, env=env)
         except Exception:
             # 忽略 /new 命令的错误
             pass
@@ -330,12 +284,9 @@ def _run_vikingbot_chat_with_config(
     if config:
         cmd.extend(["--config", config])
     cmd.extend(["-m", input, "-e"])
-    # 添加 --sender 作为当前 peer；--session 作为会话隔离标识。
+    # 添加 --sender 作为当前 peer，--session 作为会话隔离标识
     if sender_peer_id:
-        cmd.extend(["--sender", sender_peer_id])
-        cmd.append("--sender-is-peer")
-    if question_id:
-        cmd.extend(["--session", question_id])
+        cmd.extend(["--sender", sender_peer_id, "--session", question_id])
     # 添加 --memory-peer 参数，指定当前 User 下需要一并检索的额外 peer 记忆
     if memory_peer_ids:
         for peer_id in memory_peer_ids:
@@ -343,7 +294,9 @@ def _run_vikingbot_chat_with_config(
     start_time = time.time()
     try:
         # print(f'cmd={cmd}')
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=600)
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, check=True, timeout=600, env=env
+        )
         end_time = time.time()
         time_cost = end_time - start_time
 
@@ -363,7 +316,7 @@ def _run_vikingbot_chat_with_config(
             token_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
             iteration = 0
             tools_used_names = []
-        return response, token_usage, time_cost, iteration, tools_used_names
+        return response, token_usage, time_cost, iteration, tools_used_names, bot_log_file
     except subprocess.CalledProcessError as e:
         return (
             f"[CMD ERROR] {e.stderr}",
@@ -371,6 +324,7 @@ def _run_vikingbot_chat_with_config(
             0,
             0,
             [],
+            bot_log_file,
         )
     except subprocess.TimeoutExpired:
         time_cost = 0
@@ -380,7 +334,23 @@ def _run_vikingbot_chat_with_config(
             time_cost,
             0,
             [],
+            bot_log_file,
         )
+
+
+def sanitize_log_name(value: str | None) -> str:
+    text = value or f"qa_{int(time.time() * 1000)}"
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", text).strip("._") or "qa"
+
+
+def build_bot_log_file(question_id: str | None) -> str:
+    log_dir = os.environ.get("LOCOMO_VIKINGBOT_LOG_DIR")
+    if not log_dir:
+        return ""
+
+    path = Path(log_dir).expanduser()
+    path.mkdir(parents=True, exist_ok=True)
+    return str(path / f"vikingbot.{sanitize_log_name(question_id)}.log")
 
 
 def load_processed_questions(output_path: str, skip_done: bool = False) -> set[str]:
@@ -401,6 +371,20 @@ def load_processed_questions(output_path: str, skip_done: bool = False) -> set[s
 def append_row_to_csv(output_path: str, fieldnames: list[str], row: dict) -> None:
     """追加单行结果到 CSV。"""
     file_exists = os.path.exists(output_path)
+    if file_exists:
+        with open(output_path, "r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            existing_fieldnames = reader.fieldnames or []
+            existing_rows = list(reader)
+        missing_fields = [field for field in fieldnames if field not in existing_fieldnames]
+        if missing_fields:
+            merged_fieldnames = [*existing_fieldnames, *missing_fields]
+            with open(output_path, "w", encoding="utf-8", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=merged_fieldnames)
+                writer.writeheader()
+                writer.writerows(existing_rows)
+            fieldnames = merged_fieldnames
+
     with open(output_path, "a", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         if not file_exists:
@@ -561,6 +545,7 @@ def main():
         "time_cost",
         "iteration",
         "tools_used_names",
+        "bot_log_file",
     ]
 
     # 创建线程锁，确保多线程写文件安全
@@ -589,8 +574,7 @@ def main():
         question_id = qa_item.get("question_id")
         speakers = qa_item.get("speakers", [])
         source_sample_id = qa_item.get("original_sample_id")
-        openviking_user = source_sample_id
-        sender_peer_id = None
+        sender_peer_id = source_sample_id
         memory_peer_ids = None
         if args.group_chat:
             sender_peer_id = speakers[0] if speakers else source_sample_id
@@ -599,7 +583,7 @@ def main():
         if question_time:
             print(f"  [time context: {question_time}]")
         if source_sample_id:
-            print(f"  [openviking user: {source_sample_id}]")
+            print(f"  [sample peer: {source_sample_id}]")
         if speakers:
             print(f"  [speakers: {speakers}]")
         if sender_peer_id:
@@ -607,14 +591,15 @@ def main():
         if memory_peer_ids:
             print(f"  [memory peers: {memory_peer_ids}]")
 
-        response, token_usage, time_cost, iteration, tools_used_names = run_vikingbot_chat(
-            question,
-            question_time,
-            sender_peer_id,
-            question_id,
-            args.config,
-            memory_peer_ids,
-            openviking_user,
+        response, token_usage, time_cost, iteration, tools_used_names, bot_log_file = (
+            run_vikingbot_chat(
+                question,
+                question_time,
+                sender_peer_id,
+                question_id,
+                args.config,
+                memory_peer_ids,
+            )
         )
 
         row = {
@@ -632,6 +617,7 @@ def main():
             "time_cost": round(time_cost, 2),
             "iteration": iteration,
             "tools_used_names": json.dumps(tools_used_names, ensure_ascii=False),
+            "bot_log_file": bot_log_file,
             "is_invalid": qa_item.get("is_invalid", False),
         }
 
@@ -644,6 +630,8 @@ def main():
                         reader = csv.DictReader(f)
                         existing_rows = list(reader)
                         existing_fieldnames = reader.fieldnames or fieldnames
+                    if "bot_log_file" not in existing_fieldnames:
+                        existing_fieldnames.append("bot_log_file")
 
                     q_idx = str(row.get("question_index", ""))
                     found = False
