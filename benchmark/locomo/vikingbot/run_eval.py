@@ -3,6 +3,7 @@ import csv
 import json
 import os
 import subprocess
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -240,24 +241,74 @@ def run_vikingbot_chat(
     question_id: str | None = None,
     config: str | None = None,
     memory_peer_ids: list[str] | None = None,
+    openviking_user: str | None = None,
 ) -> tuple[str, dict, float, int, list]:
     """执行vikingbot chat命令，返回回答、token使用情况、耗时（秒）、迭代次数、使用的工具列表"""
+    effective_config, temp_config = _config_for_openviking_user(config, openviking_user)
+    try:
+        return _run_vikingbot_chat_with_config(
+            question=question,
+            question_time=question_time,
+            sender_peer_id=sender_peer_id,
+            question_id=question_id,
+            config=effective_config,
+            memory_peer_ids=memory_peer_ids,
+        )
+    finally:
+        if temp_config:
+            try:
+                os.remove(temp_config)
+            except OSError:
+                pass
+
+
+def _config_for_openviking_user(
+    config: str | None,
+    openviking_user: str | None,
+) -> tuple[str | None, str | None]:
+    if not config or not openviking_user:
+        return config, None
+
+    config_path = Path(config).expanduser()
+    if not config_path.exists():
+        return config, None
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    bot = data.setdefault("bot", {})
+    ov_key = "ov_server" if "ov_server" in bot else "ovServer" if "ovServer" in bot else "ov_server"
+    ov_server = bot.setdefault(ov_key, {})
+    ov_server["admin_user_id"] = openviking_user
+    account = os.environ.get("ACCOUNT") or os.environ.get("OPENVIKING_ACCOUNT")
+    if account:
+        ov_server["account_id"] = account
+
+    fd, path = tempfile.mkstemp(prefix="locomo_ov_", suffix=".conf")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    return path, path
+
+
+def _run_vikingbot_chat_with_config(
+    question: str,
+    question_time: str | None = None,
+    sender_peer_id: str | None = None,
+    question_id: str | None = None,
+    config: str | None = None,
+    memory_peer_ids: list[str] | None = None,
+) -> tuple[str, dict, float, int, list]:
     # 先执行 /new 命令清除会话
-    if sender_peer_id:
+    if sender_peer_id or question_id:
         new_cmd = ["vikingbot", "chat"]
         if config:
             new_cmd.extend(["--config", config])
-        new_cmd.extend(
-            [
-                "-m",
-                "/new",
-                "-e",
-                "--sender",
-                sender_peer_id,
-                "--session",
-                question_id,
-            ]
-        )
+        new_cmd.extend(["-m", "/new", "-e"])
+        if sender_peer_id:
+            new_cmd.extend(["--sender", sender_peer_id])
+        if question_id:
+            new_cmd.extend(["--session", question_id])
         if memory_peer_ids:
             for peer_id in memory_peer_ids:
                 new_cmd.extend(["--memory-peer", peer_id])
@@ -278,9 +329,11 @@ def run_vikingbot_chat(
     if config:
         cmd.extend(["--config", config])
     cmd.extend(["-m", input, "-e"])
-    # 添加 --sender 作为当前 peer，--session 作为会话隔离标识
+    # 添加 --sender 作为当前 peer；--session 作为会话隔离标识。
     if sender_peer_id:
-        cmd.extend(["--sender", sender_peer_id, "--session", question_id])
+        cmd.extend(["--sender", sender_peer_id])
+    if question_id:
+        cmd.extend(["--session", question_id])
     # 添加 --memory-peer 参数，指定当前 User 下需要一并检索的额外 peer 记忆
     if memory_peer_ids:
         for peer_id in memory_peer_ids:
@@ -534,7 +587,8 @@ def main():
         question_id = qa_item.get("question_id")
         speakers = qa_item.get("speakers", [])
         source_sample_id = qa_item.get("original_sample_id")
-        sender_peer_id = source_sample_id
+        openviking_user = source_sample_id
+        sender_peer_id = None
         memory_peer_ids = None
         if args.group_chat:
             sender_peer_id = speakers[0] if speakers else source_sample_id
@@ -543,7 +597,7 @@ def main():
         if question_time:
             print(f"  [time context: {question_time}]")
         if source_sample_id:
-            print(f"  [sample peer: {source_sample_id}]")
+            print(f"  [openviking user: {source_sample_id}]")
         if speakers:
             print(f"  [speakers: {speakers}]")
         if sender_peer_id:
@@ -558,6 +612,7 @@ def main():
             question_id,
             args.config,
             memory_peer_ids,
+            openviking_user,
         )
 
         row = {

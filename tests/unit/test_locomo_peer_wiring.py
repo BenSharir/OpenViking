@@ -48,8 +48,8 @@ def _sample_payload():
 
 def test_build_memory_policy_writes_peer_only():
     assert IMPORT_TO_OV.build_memory_policy(False) == {
-        "self": {"enabled": False},
-        "peer": {"enabled": True},
+        "self": {"enabled": True},
+        "peer": {"enabled": False},
     }
     assert IMPORT_TO_OV.build_memory_policy(True) == {
         "self": {"enabled": False},
@@ -57,12 +57,12 @@ def test_build_memory_policy_writes_peer_only():
     }
 
 
-def test_build_session_messages_non_group_uses_sample_peer_and_prefixes_speaker():
+def test_build_session_messages_non_group_uses_sample_user_and_prefixes_speaker():
     sessions = IMPORT_TO_OV.build_session_messages(_sample_payload(), group_chat=False)
 
     assert len(sessions) == 1
     messages = sessions[0]["messages"]
-    assert [msg["peer_id"] for msg in messages] == ["conv-26", "conv-26"]
+    assert [msg["peer_id"] for msg in messages] == [None, None]
     assert messages[0]["text"] == "Alice: Hi Bob"
     assert messages[1]["text"] == "Bob: Hello Alice"
 
@@ -137,10 +137,32 @@ def test_load_locomo_qa_keeps_internal_and_original_sample_ids(tmp_path):
     assert qa_list[0]["speakers"] == ["Alice", "Bob"]
 
 
-def test_run_vikingbot_chat_non_group_builds_sender_without_memory_peers(monkeypatch):
+def test_run_vikingbot_chat_non_group_builds_session_without_peer(monkeypatch, tmp_path):
     calls = []
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text(
+        json.dumps(
+            {
+                "bot": {
+                    "ov_server": {
+                        "server_url": "http://localhost:1933",
+                        "api_key": "root-key",
+                        "api_key_type": "root",
+                        "account_id": "default",
+                        "admin_user_id": "default",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
 
-    def fake_run(cmd, capture_output, text, timeout=None, check=False):
+    def fake_run(cmd, capture_output, text, timeout=None, check=False, env=None):
+        if "--config" in cmd:
+            temp_config = cmd[cmd.index("--config") + 1]
+            with open(temp_config, "r", encoding="utf-8") as f:
+                temp_data = json.load(f)
+            assert temp_data["bot"]["ov_server"]["admin_user_id"] == "conv-26"
         calls.append(cmd)
         return SimpleNamespace(
             stdout=json.dumps(
@@ -160,10 +182,11 @@ def test_run_vikingbot_chat_non_group_builds_sender_without_memory_peers(monkeyp
     response, token_usage, _time_cost, iteration, tools_used_names = RUN_EVAL.run_vikingbot_chat(
         question="Who said hello?",
         question_time="2023-05-08",
-        sender_peer_id="conv-26",
+        sender_peer_id=None,
         question_id="sample_0_qa0",
-        config="/tmp/ov.conf",
+        config=str(config_path),
         memory_peer_ids=None,
+        openviking_user="conv-26",
     )
 
     assert response == "ok"
@@ -173,11 +196,13 @@ def test_run_vikingbot_chat_non_group_builds_sender_without_memory_peers(monkeyp
     assert len(calls) == 2
     assert calls[0].count("--memory-peer") == 0
     assert calls[1].count("--memory-peer") == 0
-    assert calls[0][calls[0].index("--sender") + 1] == "conv-26"
-    assert calls[1][calls[1].index("--sender") + 1] == "conv-26"
+    assert "--sender" not in calls[0]
+    assert "--sender" not in calls[1]
+    assert calls[0][calls[0].index("--session") + 1] == "sample_0_qa0"
+    assert calls[1][calls[1].index("--session") + 1] == "sample_0_qa0"
 
 
-def test_run_eval_main_default_mode_uses_original_sample_id_as_sender_peer(monkeypatch, tmp_path):
+def test_run_eval_main_default_mode_uses_original_sample_id_as_openviking_user(monkeypatch, tmp_path):
     input_path = tmp_path / "locomo.json"
     output_path = tmp_path / "result.csv"
     errors_path = tmp_path / "errors.json"
@@ -193,6 +218,7 @@ def test_run_eval_main_default_mode_uses_original_sample_id_as_sender_peer(monke
         question_id=None,
         config=None,
         memory_peer_ids=None,
+        openviking_user=None,
     ):
         captured.append(
             {
@@ -201,6 +227,7 @@ def test_run_eval_main_default_mode_uses_original_sample_id_as_sender_peer(monke
                 "sender_peer_id": sender_peer_id,
                 "question_id": question_id,
                 "memory_peer_ids": memory_peer_ids,
+                "openviking_user": openviking_user,
             }
         )
         return ("ok", {"total_tokens": 1}, 0.1, 1, [])
@@ -224,7 +251,8 @@ def test_run_eval_main_default_mode_uses_original_sample_id_as_sender_peer(monke
     RUN_EVAL.main()
 
     assert len(captured) == 1
-    assert captured[0]["sender_peer_id"] == "conv-26"
+    assert captured[0]["openviking_user"] == "conv-26"
+    assert captured[0]["sender_peer_id"] is None
     assert captured[0]["memory_peer_ids"] is None
     assert captured[0]["question_id"] == "sample_0_qa0"
 
@@ -245,6 +273,7 @@ def test_run_eval_main_group_chat_uses_speaker_peers(monkeypatch, tmp_path):
         question_id=None,
         config=None,
         memory_peer_ids=None,
+        openviking_user=None,
     ):
         captured.append(
             {
@@ -253,6 +282,7 @@ def test_run_eval_main_group_chat_uses_speaker_peers(monkeypatch, tmp_path):
                 "sender_peer_id": sender_peer_id,
                 "question_id": question_id,
                 "memory_peer_ids": memory_peer_ids,
+                "openviking_user": openviking_user,
             }
         )
         return ("ok", {"total_tokens": 1}, 0.1, 1, [])
@@ -277,6 +307,7 @@ def test_run_eval_main_group_chat_uses_speaker_peers(monkeypatch, tmp_path):
     RUN_EVAL.main()
 
     assert len(captured) == 1
+    assert captured[0]["openviking_user"] == "conv-26"
     assert captured[0]["sender_peer_id"] == "Alice"
     assert captured[0]["memory_peer_ids"] == ["Bob"]
     assert captured[0]["question_id"] == "sample_0_qa0"

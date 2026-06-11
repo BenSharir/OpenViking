@@ -33,13 +33,15 @@ def _get_session_number(session_key: str) -> int:
 def build_memory_policy(group_chat: bool) -> Dict[str, Dict[str, bool]]:
     """Build session/commit memory policy for benchmark ingest.
 
-    LoCoMo eval isolates samples through peer memory. In non-group mode the
-    peer is the sample_id (for example conv-26); in group mode the peer is the
-    speaker. Do not write benchmark memories into the current User self memory,
-    otherwise all samples imported by the same User API key become visible to
-    every question.
+    LoCoMo eval isolates samples through OpenViking user id. In non-group mode,
+    messages are written to the sample user's self memory. In group-chat mode,
+    messages are written to speaker peers under the same sample user.
     """
-    del group_chat
+    if not group_chat:
+        return {
+            "self": {"enabled": True},
+            "peer": {"enabled": False},
+        }
     return {
         "self": {"enabled": False},
         "peer": {"enabled": True},
@@ -101,7 +103,7 @@ def build_session_messages(
 
     Args:
         group_chat: If True, use speaker names as peer_id.
-                    If False, use sample_id as peer_id and prefix speaker in text.
+                    If False, store under the sample user and prefix speaker in text.
     """
     conv = item["conversation"]
     sample_peer_id = item["sample_id"]
@@ -138,14 +140,14 @@ def build_session_messages(
                     }
                 )
             else:
-                # single-chat 模式下按 sample_id 聚合 peer，
-                # speaker 信息嵌入文本以保留说话人身份
+                # single-chat 模式下按 sample_id 对应的 OpenViking user 隔离，
+                # 不再传 peer_id；speaker 信息嵌入文本以保留说话人身份。
                 messages.append(
                     {
                         "role": "user",
                         "text": f"{speaker}: {text}",
                         "speaker": speaker,
-                        "peer_id": sample_peer_id,
+                        "peer_id": None,
                         "index": idx,
                     }
                 )
@@ -453,17 +455,24 @@ async def process_single_session(
     source_sample_id = str(sample_id)
     try:
         started_at = time.perf_counter()
-        if args.trusted_identity_user is not None:
+        if args.separate_user_by_sample:
+            user_id = source_sample_id
+            account = args.account
+            trusted_identity_user = None
+        elif args.trusted_identity_user is not None:
             user_id = ""
             account = args.account
+            trusted_identity_user = args.trusted_identity_user
         elif args.api_key:
             # User API keys already pin account/user on the server side. Passing
             # account/user headers would be rejected in api_key auth mode.
             user_id = ""
             account = ""
+            trusted_identity_user = None
         else:
-            user_id = str(sample_id) if args.separate_user_by_sample else ""
-            account = args.account if args.separate_user_by_sample else ""
+            user_id = ""
+            account = ""
+            trusted_identity_user = None
         result = await viking_ingest(
             messages,
             args.openviking_url,
@@ -472,7 +481,7 @@ async def process_single_session(
             account=account,
             api_key=args.api_key,
             group_chat=args.group_chat,
-            trusted_identity_user=args.trusted_identity_user,
+            trusted_identity_user=trusted_identity_user,
         )
         duration_seconds = round(time.perf_counter() - started_at, 3)
         token_usage = result["token_usage"]

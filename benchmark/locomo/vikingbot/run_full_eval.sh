@@ -26,9 +26,7 @@ for arg in "$@"; do
         echo ""
         echo "开关参数:"
         echo "  --skip-import     跳过导入步骤，直接使用已导入的数据进行评测"
-        echo "  --group-chat      群聊模式，使用 speaker 作为 Peer，并传 --memory-peer"
-        echo "  --no-group-chat   非群聊模式（默认），使用 sample_id 作为 Peer"
-        echo "  --no-group-chat   非群聊模式（默认），使用 sample_id 作为 Peer"
+        echo "  --group-chat      群聊模式，使用 sample_id 作为 OpenViking user，speaker 作为 Peer，并传 --memory-peer"
         echo "  --auto-commit     自动提交未提交的代码变更，结果文件名带 commit id 和时间戳"
         echo "  --retry-wrong CSV 只重跑指定结果文件中的有效错题（导入相关对话+重新问答）"
         echo "  --parallel-import-sessions N  单 sample 内并发导入 sessions；默认关闭，用于压测并发 add/merge"
@@ -125,8 +123,6 @@ for arg in "$@"; do
         SKIP_IMPORT=true
     elif [ "$arg" = "--group-chat" ]; then
         GROUP_CHAT=true
-    elif [ "$arg" = "--no-group-chat" ]; then
-        GROUP_CHAT=false
     elif [ "$arg" = "--auto-commit" ]; then
         AUTO_COMMIT=true
     elif [ "$arg" = "--retry-wrong" ]; then
@@ -151,7 +147,7 @@ for arg in "$@"; do
         SKIP_NEXT=true
         continue
     fi
-    if [ "$arg" != "--skip-import" ] && [ "$arg" != "--group-chat" ] && [ "$arg" != "--no-group-chat" ] && [ "$arg" != "--auto-commit" ]; then
+    if [ "$arg" != "--skip-import" ] && [ "$arg" != "--group-chat" ] && [ "$arg" != "--auto-commit" ]; then
         ARGS+=("$arg")
     fi
 done
@@ -160,17 +156,14 @@ done
 COMMON_OPTS=()
 if [ "$GROUP_CHAT" = "true" ]; then
     COMMON_OPTS+=("--group-chat")
-else
-    COMMON_OPTS+=("--no-group-chat")
 fi
 IMPORT_OPTS=()
 if [ "${OPENVIKING_AUTH_MODE:-}" = "trusted" ]; then
-    IMPORT_OPTS+=("--trusted-identity-user" "$OPENVIKING_USER")
     if [ -n "${OPENVIKING_API_KEY:-}" ]; then
         IMPORT_OPTS+=("--api-key" "$OPENVIKING_API_KEY")
     fi
 elif [ -n "${OPENVIKING_API_KEY:-}" ]; then
-    IMPORT_OPTS+=("--api-key" "$OPENVIKING_API_KEY" "--no-separate-user-by-sample")
+    IMPORT_OPTS+=("--api-key" "$OPENVIKING_API_KEY")
 fi
 if [ -n "$PARALLEL_IMPORT_SESSIONS" ]; then
     if ! [[ "$PARALLEL_IMPORT_SESSIONS" =~ ^[1-9][0-9]*$ ]]; then

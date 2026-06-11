@@ -709,9 +709,16 @@ CaseSpec 会做精简，避免传入巨大或重复字段：
 ```text
 POST /v1/cases/query
 POST /v1/rollouts/execute
+GET  /v1/rollouts/executions/{execution_id}
 ```
 
-这样训练框架不需要直接依赖 tau2 或其他 benchmark 的代码，只依赖通用 Case/Rollout JSON 协议。
+其中 `/v1/rollouts/execute` 只负责提交单个 case 的 rollout execution，返回
+`execution_id`；`RemoteRolloutExecutor` 会并发提交多个 case，并通过
+`/v1/rollouts/executions/{execution_id}` 轮询状态。这样长耗时 rollout 不会占用
+一个超长 HTTP request，也便于未来 benchmark service 做多机部署和负载均衡。
+
+这样训练框架不需要直接依赖 tau2 或其他 benchmark 的代码，只依赖通用
+Case/Rollout JSON 协议。
 
 ## 14. tau2 集成
 
@@ -904,6 +911,305 @@ accuracy delta: +10.00pp
 ```
 
 `average_reward` 保留为辅助指标；主指标是 `accuracy`。
+
+### 15.6 以 tau2 为例：新场景接入需要实现的接口
+
+一个新的 benchmark / domain / environment 接入训练评测框架时，推荐复用 tau2
+的分层方式：把场景 runtime 独立成一个 HTTP service，训练进程继续使用通用
+`RemoteCaseLoader` / `RemoteRolloutExecutor`。训练框架不关心场景内部怎么启动
+agent、怎么调用工具、怎么计算 reward，只要求 service 实现下面这些协议。
+
+#### 15.6.1 Case 查询接口
+
+```text
+POST /v1/cases/query
+```
+
+请求：
+
+```json
+{
+  "dataset": "tau2",
+  "domain": "airline",
+  "split": "train",
+  "cursor": null,
+  "limit": 100,
+  "filters": {}
+}
+```
+
+响应：
+
+```json
+{
+  "cases": [
+    {
+      "name": "tau2_airline_train_0",
+      "task_signature": "tau2:airline:train:0",
+      "input": {
+        "domain": "airline",
+        "split": "train",
+        "task_id": "0",
+        "task_no": 0,
+        "user_query": "...",
+        "ground_truth": "..."
+      },
+      "rubric": {
+        "name": "tau2_airline_train_0_rubric",
+        "description": "...",
+        "criteria": [
+          {
+            "name": "tau2_reward",
+            "description": "The tau2 environment reward is 1.0.",
+            "required": true,
+            "weight": 1.0,
+            "metadata": {}
+          }
+        ],
+        "metadata": {}
+      },
+      "metadata": {
+        "dataset": "tau2",
+        "domain": "airline",
+        "source": "tau2",
+        "split": "train"
+      }
+    }
+  ],
+  "next_cursor": "100"
+}
+```
+
+接入要求：
+
+- `dataset/domain/split` 用于定位数据集切片。
+- `cursor/limit` 用于分页；没有下一页时 `next_cursor = null`。
+- `Case.input` 只放 rollout 必需的任务输入和场景元信息，不要塞训练框架已经能从
+  上下文拿到的内容，例如完整 system prompt、完整 rollout metadata、evaluation
+  结果或 policy snapshot。
+- `Case.rubric` 必须能描述评测目标；如果环境能直接给 reward，也仍然要提供
+  rubric，便于训练侧把 reward 转成统一的 `RubricEvaluation`。
+
+tau2 中对应实现是：
+
+```text
+benchmark/tau2/service/app.py::query_cases
+benchmark/tau2/train/case_loader.py::Tau2CaseLoader
+```
+
+#### 15.6.2 Rollout 提交接口
+
+```text
+POST /v1/rollouts/execute
+```
+
+请求：
+
+```json
+{
+  "case": { "...": "Case JSON" },
+  "policy_set": {
+    "root_uri": "viking://user/default/memories/experiences",
+    "policies": [],
+    "metadata": {}
+  },
+  "execution_context": {
+    "policy_snapshot_id": "tau2-policy-snapshot:...",
+    "metadata": {
+      "epoch": 0,
+      "training": true
+    }
+  },
+  "options": {
+    "config_path": "/path/to/ov.conf",
+    "max_iterations": 30,
+    "keep_default_tools": true,
+    "rollout_language": "default"
+  }
+}
+```
+
+响应：
+
+```json
+{
+  "execution_id": "rollout_exec_...",
+  "status": "running",
+  "case_name": "tau2_airline_train_0",
+  "created_at": 1781097747.0,
+  "updated_at": 1781097747.0,
+  "error": null
+}
+```
+
+接入要求：
+
+- 该接口只提交一个 case 的 rollout execution，不需要同步等待 rollout 完成。
+- 客户端会对多个 case 发起多个请求，service 端可以自行排队、限流、调度到不同
+  worker 或机器。
+- `policy_set.root_uri` 告诉 runtime 当前 experiences 根目录；tau2 rollout 期间
+  VikingBot 会通过 OpenViking recall 读取这里的最新经验。
+- `execution_context.policy_snapshot_id` 必须原样写入返回的 `Rollout.policy_snapshot_id`，
+  用于追踪这次 rollout 使用的是哪次 policy snapshot。
+
+tau2 中对应实现是：
+
+```text
+benchmark/tau2/service/app.py::execute_rollout
+benchmark/tau2/service/app.py::_run_rollout_execution
+benchmark/tau2/train/rollout_executor.py::Tau2RolloutExecutor
+```
+
+#### 15.6.3 Rollout 状态轮询接口
+
+```text
+GET /v1/rollouts/executions/{execution_id}
+```
+
+运行中响应：
+
+```json
+{
+  "execution_id": "rollout_exec_...",
+  "status": "running",
+  "case_name": "tau2_airline_train_0",
+  "created_at": 1781097747.0,
+  "updated_at": 1781097750.0,
+  "error": null
+}
+```
+
+完成响应：
+
+```json
+{
+  "execution_id": "rollout_exec_...",
+  "status": "completed",
+  "case_name": "tau2_airline_train_0",
+  "created_at": 1781097747.0,
+  "updated_at": 1781097760.0,
+  "error": null,
+  "rollout": {
+    "case": { "...": "Case JSON" },
+    "messages": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "..."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool",
+            "tool_id": "tau2-tool-0",
+            "tool_name": "get_reservation_details",
+            "tool_input": {"reservation_id": "EHGLP3"},
+            "tool_output": "...",
+            "tool_status": "completed"
+          }
+        ]
+      }
+    ],
+    "policy_snapshot_id": "tau2-policy-snapshot:...",
+    "evaluation": {
+      "passed": false,
+      "score": 0.0,
+      "criterion_results": [
+        {
+          "criterion_name": "tau2_reward",
+          "passed": false,
+          "score": 0.0,
+          "feedback": ["tau2 environment reward is below 1.0."],
+          "evidence": [],
+          "metadata": {"reward": 0.0}
+        }
+      ],
+      "feedback": ["tau2 environment reward is below 1.0."],
+      "metadata": {
+        "source": "tau2_executor",
+        "reward": 0.0
+      }
+    },
+    "metadata": {
+      "memory": "...",
+      "tools_used": [],
+      "iterations": 6
+    }
+  }
+}
+```
+
+失败响应：
+
+```json
+{
+  "execution_id": "rollout_exec_...",
+  "status": "failed",
+  "case_name": "tau2_airline_train_0",
+  "created_at": 1781097747.0,
+  "updated_at": 1781097752.0,
+  "error": "..."
+}
+```
+
+接入要求：
+
+- `status` 至少支持 `running/completed/failed`。
+- `completed` 时必须返回完整 `rollout`。
+- `failed` 时必须返回可读 `error`，训练侧会把它归入该 case 的 rollout 失败。
+- `Rollout.messages` 应使用 OpenViking `Message` / `Part` 结构；工具调用和工具结果
+  用 `ToolPart`，不要把 `tool-call:\nname: ...` 塞进普通 text content。
+- `Rollout.evaluation` 在 eval 阶段是必需字段；如果没有 evaluation，
+  `OfflinePolicyOptimizationPipeline.eval(...)` 会失败。
+
+#### 15.6.4 RolloutExecutor 内部职责
+
+新场景自己的 rollout executor 需要完成这些事情：
+
+1. 根据 `Case.input` 初始化环境和用户模拟器。
+2. 根据 `policy_set.root_uri` / OpenViking 配置让 agent 读取当前 experiences。
+3. 执行 agent loop，记录 user/assistant/tool messages。
+4. 把环境 reward 或 judge 结果转成 `RubricEvaluation`。
+5. 返回统一 `Rollout`：
+
+```python
+Rollout(
+    case=case,
+    messages=messages,
+    policy_snapshot_id=context.policy_snapshot_id,
+    evaluation=RubricEvaluation(...),
+    metadata={
+        "tools_used": [...],
+        "iterations": ...,
+        "memory": "...",
+    },
+)
+```
+
+tau2 的 `Tau2RolloutExecutor` 就是这个适配层：它一侧依赖 tau2/VikingBot runtime，
+另一侧只输出训练框架理解的 `Rollout`。
+
+#### 15.6.5 最小接入清单
+
+接入一个新场景，最少需要实现：
+
+| 接口/组件 | 必需 | 作用 |
+|---|---:|---|
+| `POST /v1/cases/query` | 是 | 分页返回 `Case[]` |
+| `POST /v1/rollouts/execute` | 是 | 提交单个 rollout execution |
+| `GET /v1/rollouts/executions/{execution_id}` | 是 | 轮询 rollout 状态并取回 `Rollout` |
+| `RubricEvaluation` 转换 | eval 必需 | 把场景 reward/judge 结果转成统一 evaluation |
+| `Message` / `ToolPart` 转换 | 训练必需 | 保留 agent 行为和工具证据，供 session.commit 抽取 trajectory/experience |
+| `GET /health` | 建议 | 方便 runner 或部署系统做 preflight |
+
+如果新场景不想提供 HTTP service，也可以在同进程内直接实现
+`CaseLoader` / `RolloutExecutor` Protocol；但跨进程、多机或重 runtime 依赖的场景，
+推荐采用 tau2 这种 service 方式。
 
 ## 16. 当前主要组件清单
 
