@@ -204,7 +204,7 @@ class Tau2RolloutExecutor:
         if provider.env is not None:
             try:
                 _append_final_answer_for_tau2_evaluation(provider.env, final_content)
-                reward, evaluation_result = provider.env.env._get_reward()
+                reward, evaluation_result = provider.env._get_reward()
             except Exception as exc:
                 logger.exception(
                     "tau2 reward calculation failed case=%s domain=%s task_id=%s",

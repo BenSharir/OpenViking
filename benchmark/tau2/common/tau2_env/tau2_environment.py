@@ -93,6 +93,9 @@ class Tau2BenchEnv:
         if callable(append_message):
             append_message(content)
 
+    def _get_reward(self):
+        return self._impl._get_reward()
+
 
 class _GymTau2BenchEnv:
     def __init__(self, domain: str, task_id: str):
