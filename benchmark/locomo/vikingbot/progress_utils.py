@@ -8,12 +8,10 @@ scenarios.
 from __future__ import annotations
 
 import sys
-import time
 from typing import Optional
 
 from rich.console import Console
 from rich.progress import (
-    BarColumn,
     Progress,
     ProgressColumn,
     Task,
@@ -24,7 +22,6 @@ from rich.progress import (
 )
 from rich.table import Column
 from rich.text import Text
-
 
 # ---------------------------------------------------------------------------
 # Three-state bar column
@@ -54,6 +51,7 @@ class ThreeStateBarColumn(ProgressColumn):
         pulse_style: str = "bar.pulse",
         table_column: Optional[Column] = None,
     ) -> None:
+        super().__init__(table_column=table_column or Column(ratio=1, no_wrap=True))
         self.bar_width = bar_width
         self.style = style
         # "complete" = done portion, "finished" = running portion.
@@ -61,10 +59,6 @@ class ThreeStateBarColumn(ProgressColumn):
         self.complete_style = complete_style or style
         self.finished_style = finished_style or running_style
         self.pulse_style = pulse_style
-        self._table_column = table_column or Column(ratio=1, no_wrap=True)
-
-    def get_table_column(self) -> "Column":
-        return self._table_column
 
     def render(self, task: Task) -> Text:
         """Render the three-state bar."""
