@@ -396,48 +396,68 @@ async def merge_memory_operations(
         )
         return operations
 
-    groups: dict[str, list[ResolvedOperation]] = {}
+    # Group by (peer_id, memory_type) — peer_id is None for self memories.
+    # Upserts get peer_id from memory_fields; deletes get it from extra_fields.
+    # Types with ranges (e.g. events) pop peer_id from memory_fields, but those are
+    # add_only and skip merge entirely, so they never reach this grouping.
+    upsert_groups: dict[tuple[str | None, str], list[ResolvedOperation]] = {}
+    delete_groups: dict[tuple[str | None, str], list[MemoryFile]] = {}
     passthrough_upserts: list[ResolvedOperation] = []
     for op in operations.upsert_operations:
         if not op.uris:
             passthrough_upserts.append(op)
             continue
+        peer_id = _peer_id_for_operation(op)
         for uri in op.uris:
             single_uri_op = clone_operation_for_uri(op, uri)
-            groups.setdefault(single_uri_op.memory_type, []).append(single_uri_op)
+            upsert_groups.setdefault(
+                (peer_id, single_uri_op.memory_type), []
+            ).append(single_uri_op)
+    for df in operations.delete_file_contents:
+        peer_id = _peer_id_for_memory_file(df)
+        memory_type = df.memory_type or ""
+        delete_groups.setdefault((peer_id, memory_type), []).append(df)
+
+    # Union all group keys from both upserts and deletes
+    all_group_keys = list(
+        dict.fromkeys(list(upsert_groups.keys()) + list(delete_groups.keys()))
+    )
 
     tracer.info(
         "[streaming_memory_updater] merge batch "
         f"patch_count={len(operations.upsert_operations or [])} "
         f"delete_count={len(operations.delete_file_contents or [])} "
         f"passthrough_upserts={len(passthrough_upserts)} "
-        f"memory_type_count={len(groups)} "
-        f"memory_types={sorted(groups.keys())}",
+        f"group_count={len(all_group_keys)} "
+        f"groups={sorted(str(k) for k in all_group_keys)}",
         console=trace_console,
     )
 
     merged_upserts = list(passthrough_upserts)
-    merged_deletes = list(operations.delete_file_contents)
+    merged_deletes: list[MemoryFile] = []
     merged_links = merge_link_lists(list(getattr(operations, "resolved_links", []) or []))
     registry = registry or create_default_registry()
     merge_results = await asyncio.gather(
         *[
             _merge_memory_type_group(
                 memory_type=memory_type,
-                operations=memory_ops,
+                operations=upsert_groups.get((peer_id, memory_type), []),
+                delete_files=delete_groups.get((peer_id, memory_type), []),
                 messages=messages,
                 ctx=ctx,
                 registry=registry,
+                peer_id=peer_id,
                 trace_console=trace_console,
             )
-            for memory_type, memory_ops in groups.items()
+            for (peer_id, memory_type) in all_group_keys
         ],
         return_exceptions=True,
     )
 
-    for (memory_type, memory_ops), merge_result in zip(
-        groups.items(), merge_results, strict=True
+    for (peer_id, memory_type), group_key, merge_result in zip(
+        all_group_keys, all_group_keys, merge_results, strict=True
     ):
+        ops_list = upsert_groups.get(group_key, [])
         if not isinstance(merge_result, Exception):
             merged = merge_result
             merged_upserts.extend(merged.upsert_operations)
@@ -448,19 +468,25 @@ async def merge_memory_operations(
             )
             continue
 
+        peer_label = f"peer={peer_id}" if peer_id else "peer=self"
         tracer.info(
             "[streaming_memory_updater] merge fallback "
-            f"memory_type={memory_type} mode=fallback_original "
-            f"reason=llm_merge_failed patch_count={len(memory_ops)} "
-            f"target_count={len(_unique_operation_uris(memory_ops))} error={merge_result}",
+            f"memory_type={memory_type} {peer_label} mode=fallback_original "
+            f"reason=llm_merge_failed patch_count={len(ops_list)} "
+            f"target_count={len(_unique_operation_uris(ops_list))} error={merge_result}",
             console=trace_console,
         )
         logger.warning(
-            "[streaming_memory_updater] merge failed for %s: %s", memory_type, merge_result
+            "[streaming_memory_updater] merge failed for %s (%s): %s",
+            memory_type,
+            peer_label,
+            merge_result,
         )
-        if strict_extract_errors or is_cross_extraction_group(memory_ops):
+        if strict_extract_errors or is_cross_extraction_group(ops_list):
             raise merge_result
-        merged_upserts.extend(memory_ops)
+        # Fallback: keep original operations and delete files for this group
+        merged_upserts.extend(ops_list)
+        merged_deletes.extend(delete_groups.get(group_key, []))
 
     merged_links = await filter_valid_links(
         merged_links,
@@ -481,17 +507,21 @@ async def _merge_memory_type_group(
     *,
     memory_type: str,
     operations: list[ResolvedOperation],
+    delete_files: list[MemoryFile],
     messages: list[Message],
     ctx: RequestContext,
     registry: MemoryTypeRegistry,
+    peer_id: str | None = None,
     trace_console: bool = False,
 ) -> ResolvedOperations:
     return await merge_one_memory_type_operations(
         memory_type=memory_type,
         operations=operations,
+        delete_files=delete_files,
         messages=messages,
         ctx=ctx,
         registry=registry,
+        peer_id=peer_id,
         trace_console=trace_console,
     )
 
@@ -500,23 +530,42 @@ async def merge_one_memory_type_operations(
     *,
     memory_type: str,
     operations: list[ResolvedOperation],
+    delete_files: list[MemoryFile] | None = None,
     messages: list[Message],
     ctx: RequestContext,
     registry: MemoryTypeRegistry | None = None,
+    peer_id: str | None = None,
     trace_console: bool = False,
 ) -> ResolvedOperations:
     registry = registry or create_default_registry()
     schema = registry.get(memory_type)
+    delete_files = list(delete_files or [])
     patch_count = len(operations)
     target_uris = _unique_operation_uris(operations)
     target_count = len(target_uris)
     existing_file_count = sum(
         1 for op in operations if getattr(op, "old_memory_file_content", None) is not None
     )
+    delete_count = len(delete_files)
     duplicate_target_count = patch_count - target_count
     operation_mode = (
         getattr(schema, "operation_mode", "unknown") if schema is not None else "unknown"
     )
+
+    # Fast path: no upserts, only deletes — passthrough directly
+    if not operations and delete_files:
+        tracer.info(
+            "[streaming_memory_updater] memory_type merge decision "
+            f"memory_type={memory_type} mode=no_merge "
+            f"reason=delete_only delete_count={delete_count}",
+            console=trace_console,
+        )
+        return ResolvedOperations(
+            upsert_operations=[],
+            delete_file_contents=list(delete_files),
+            errors=[],
+            resolved_links=[],
+        )
     if operation_mode == "add_only":
         tracer.info(
             "[streaming_memory_updater] memory_type merge decision "
@@ -556,7 +605,8 @@ async def merge_one_memory_type_operations(
         "[streaming_memory_updater] memory_type merge decision "
         f"memory_type={memory_type} mode=llm_merge "
         f"reason={fast_path_reason} operation_mode={operation_mode} "
-        f"patch_count={patch_count} target_count={target_count} "
+        f"patch_count={patch_count} delete_count={delete_count} "
+        f"target_count={target_count} "
         f"duplicate_target_count={duplicate_target_count} "
         f"existing_file_count={existing_file_count}",
         console=trace_console,
@@ -566,16 +616,24 @@ async def merge_one_memory_type_operations(
         raise ValueError(f"Memory schema not found: {memory_type}")
 
     extract_context = ExtractContext(messages)
+    # Existing files: both upsert old_content and delete files count as "existing"
     required_file_uris = list(
         dict.fromkeys(
-            uri
-            for op in operations
-            for uri in op.uris
-            if getattr(op, "old_memory_file_content", None) is not None
+            [
+                uri
+                for op in operations
+                for uri in op.uris
+                if getattr(op, "old_memory_file_content", None) is not None
+            ]
+            + [df.uri for df in delete_files if df.uri]
         )
     )
     patches = [
-        operation_to_patch(op, schema=schema, extract_context=extract_context) for op in operations
+        operation_to_patch(op, schema=schema, extract_context=extract_context)
+        for op in operations
+    ] + [
+        memory_file_to_delete_patch(df, schema=schema, extract_context=extract_context)
+        for df in delete_files
     ]
     provider = PatchMergeContextProvider(
         memory_type=memory_type,
@@ -585,12 +643,30 @@ async def merge_one_memory_type_operations(
     provider._ctx = ctx
     provider._viking_fs = safe_get_viking_fs()
     provider._extract_context = extract_context
-    isolation_handler = MemoryIsolationHandler(
-        ctx, extract_context, allowed_memory_types={memory_type}
-    )
+    # Build isolation handler matching this group's peer scope.
+    # peer_id=None → self scope; peer_id set → peer-only scope.
+    if peer_id:
+        isolation_handler = MemoryIsolationHandler(
+            ctx,
+            extract_context,
+            allowed_memory_types={memory_type},
+            allow_self=False,
+            allowed_peer_ids={peer_id},
+        )
+    else:
+        isolation_handler = MemoryIsolationHandler(
+            ctx,
+            extract_context,
+            allowed_memory_types={memory_type},
+            allow_self=True,
+        )
     isolation_handler.prepare_messages()
     provider._isolation_handler = isolation_handler
     seed_patch_merge_read_contents(provider, operations)
+    # Also seed delete files into read_contents so LLM can see their content
+    for df in delete_files:
+        if df.uri:
+            provider.read_file_contents[df.uri] = df
     prefetch_messages = await provider.prefetch()
 
     async def _prefetch():
@@ -664,6 +740,30 @@ def clone_operation_for_uri(op: ResolvedOperation, uri: str) -> ResolvedOperatio
             "source": getattr(op, "source", None),
         },
         deep=True,
+    )
+
+
+def memory_file_to_delete_patch(
+    mf: MemoryFile,
+    *,
+    schema: MemoryTypeSchema,
+    extract_context: ExtractContext,
+) -> PatchMergePatch:
+    """Convert a delete-file MemoryFile to a PatchMergePatch.
+
+    The before_file is the original content; after_file is empty content,
+    representing a deletion proposal. The merge LLM should put deleted files
+    in delete_uris.
+    """
+    after_file = MemoryFile(
+        uri=mf.uri,
+        memory_type=mf.memory_type,
+        content="",
+        extra_fields=dict(mf.extra_fields or {}),
+    )
+    return PatchMergePatch(
+        before_file=mf,
+        after_file=after_file,
     )
 
 
@@ -795,6 +895,22 @@ def can_fast_path_memory_operations(
     schema: MemoryTypeSchema | None = None,
 ) -> bool:
     return classify_memory_merge_mode(operations, schema=schema)[0]
+
+
+def _peer_id_for_operation(op: ResolvedOperation) -> str | None:
+    """Get peer_id from a resolved operation's memory_fields.
+
+    Returns None for self (user-level) memories.
+    """
+    return op.memory_fields.get("peer_id")
+
+
+def _peer_id_for_memory_file(mf: MemoryFile) -> str | None:
+    """Get peer_id from a MemoryFile's extra_fields.
+
+    Returns None for self (user-level) memories.
+    """
+    return mf.extra_fields.get("peer_id") if mf.extra_fields else None
 
 
 def _unique_operation_uris(operations: list[ResolvedOperation]) -> list[str]:
