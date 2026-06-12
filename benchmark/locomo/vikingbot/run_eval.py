@@ -4,11 +4,28 @@ import json
 import os
 import re
 import subprocess
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
+
+from progress_utils import (
+    ThreadSafeProgressTracker,
+    make_three_state_progress,
+    should_show_progress,
+)
+
+
+class _NullCtx:
+    """No-op context manager for the non-progress path."""
+
+    def __enter__(self):
+        return None
+
+    def __exit__(self, *args):
+        return False
 
 
 def get_evidence_text(evidence_list: list, sample: dict) -> list[str]:
@@ -459,6 +476,11 @@ def main():
         action="store_true",
         help="Skip questions already present in the output file",
     )
+    parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Disable the live progress bar (fall back to line-by-line logs). Auto-disabled when stderr is not a TTY.",
+    )
     args = parser.parse_args()
 
     # 如果指定了 question-index，自动设置 count=1
@@ -562,11 +584,24 @@ def main():
     remaining_qa = [qa for qa in qa_list if qa["question"] not in processed_questions]
     remaining_count = len(remaining_qa)
     print(
-        f"Starting evaluation with {args.threads} concurrent threads, {remaining_count} questions to process"
+        f"Starting evaluation with {args.threads} concurrent threads, {remaining_count} questions to process",
+        file=sys.stderr,
     )
+
+    show_progress = should_show_progress(args.no_progress)
+
+    if show_progress:
+        progress, task_id = make_three_state_progress(description="Eval")
+        progress_tracker = ThreadSafeProgressTracker(progress, task_id, total=remaining_count)
+    else:
+        progress = None
+        progress_tracker = None
 
     def process_qa(qa_item, idx, total_count):
         """单个QA处理函数，供多线程调用"""
+        if progress_tracker is not None:
+            progress_tracker.job_started()
+
         question = qa_item["question"]
         answer = qa_item["answer"]
         question_time = qa_item.get("question_time")
@@ -579,28 +614,35 @@ def main():
         if args.group_chat:
             sender_peer_id = speakers[0] if speakers else source_sample_id
             memory_peer_ids = speakers[1:] if len(speakers) > 1 else None
-        print(f"Processing {idx}/{total_count}: {question[:60]}...")
-        if question_time:
-            print(f"  [time context: {question_time}]")
-        if source_sample_id:
-            print(f"  [sample peer: {source_sample_id}]")
-        if speakers:
-            print(f"  [speakers: {speakers}]")
-        if sender_peer_id:
-            print(f"  [sender peer: {sender_peer_id}]")
-        if memory_peer_ids:
-            print(f"  [memory peers: {memory_peer_ids}]")
 
-        response, token_usage, time_cost, iteration, tools_used_names, bot_log_file = (
-            run_vikingbot_chat(
-                question,
-                question_time,
-                sender_peer_id,
-                question_id,
-                args.config,
-                memory_peer_ids,
+        if not show_progress:
+            print(f"Processing {idx}/{total_count}: {question[:60]}...")
+            if question_time:
+                print(f"  [time context: {question_time}]")
+            if source_sample_id:
+                print(f"  [sample peer: {source_sample_id}]")
+            if speakers:
+                print(f"  [speakers: {speakers}]")
+            if sender_peer_id:
+                print(f"  [sender peer: {sender_peer_id}]")
+            if memory_peer_ids:
+                print(f"  [memory peers: {memory_peer_ids}]")
+
+        try:
+            response, token_usage, time_cost, iteration, tools_used_names, bot_log_file = (
+                run_vikingbot_chat(
+                    question,
+                    question_time,
+                    sender_peer_id,
+                    question_id,
+                    args.config,
+                    memory_peer_ids,
+                )
             )
-        )
+        except Exception as e:
+            if progress_tracker is not None:
+                progress_tracker.job_finished()
+            raise
 
         row = {
             "sample_id": qa_item["sample_id"],
@@ -655,22 +697,28 @@ def main():
             new_rows.append(row)
             processed_questions.add(question)
             processed_count += 1
-            print(f"Completed {processed_count}/{total_count}, time cost: {round(time_cost, 2)}s")
+            if not show_progress:
+                print(f"Completed {processed_count}/{total_count}, time cost: {round(time_cost, 2)}s")
+
+        if progress_tracker is not None:
+            progress_tracker.job_finished()
         return True
 
     # 使用线程池处理：全局并行，每个 question 独立 session
-    with ThreadPoolExecutor(max_workers=args.threads) as executor:
-        # 提交所有任务
-        futures = []
-        for idx, qa_item in enumerate(remaining_qa, 1):
-            futures.append(executor.submit(process_qa, qa_item, idx, remaining_count))
+    ctx = progress if show_progress else _NullCtx()
+    with ctx:
+        with ThreadPoolExecutor(max_workers=args.threads) as executor:
+            # 提交所有任务
+            futures = []
+            for idx, qa_item in enumerate(remaining_qa, 1):
+                futures.append(executor.submit(process_qa, qa_item, idx, remaining_count))
 
-        # 等待所有任务完成
-        for future in as_completed(futures):
-            try:
-                future.result()
-            except Exception as e:
-                print(f"Error processing QA item: {str(e)}")
+            # 等待所有任务完成
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception as e:
+                    print(f"Error processing QA item: {str(e)}", file=sys.stderr)
 
     print(f"Evaluation completed, results saved to {args.output}")
 
