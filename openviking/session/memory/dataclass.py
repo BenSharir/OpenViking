@@ -253,7 +253,12 @@ class MemoryFile(BaseModel):
 
     def to_metadata(self) -> Dict[str, Any]:
         """Flatten to a dict suitable for serialize_with_metadata."""
-        metadata = dict(self.extra_fields)
+        metadata = {
+            key: value
+            for key, value in dict(self.extra_fields).items()
+            if key not in {"user_id", "user_ids"}
+        }
+        metadata.setdefault("version", 1)
         metadata["content"] = self.content
         if self.links:
             metadata["links"] = self.links

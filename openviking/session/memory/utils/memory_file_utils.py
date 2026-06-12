@@ -15,6 +15,29 @@ _MEMORY_FIELDS_PATTERN_END = re.compile(r"<!--\s*MEMORY_FIELDS\s*\n(.*?)\n-->$",
 DEFAULT_TRUNCATE_MAX_CHARS = 1000
 
 
+def memory_version_from_fields(fields: Optional[Dict[str, Any]], *, default: int = 1) -> int:
+    """Return a positive MEMORY_FIELDS version, falling back to ``default``."""
+    try:
+        version = int((fields or {}).get("version"))
+    except (TypeError, ValueError):
+        return default
+    return version if version > 0 else default
+
+
+def next_memory_version(old_file: Optional[MemoryFile]) -> int:
+    """Return the next persisted MEMORY_FIELDS version for a write."""
+    if old_file is None:
+        return 1
+    return memory_version_from_fields(old_file.extra_fields, default=1) + 1
+
+
+def bump_memory_version(memory_file: MemoryFile) -> None:
+    """Increment a MemoryFile's persisted MEMORY_FIELDS version in-place."""
+    memory_file.extra_fields["version"] = memory_version_from_fields(
+        memory_file.extra_fields, default=1
+    ) + 1
+
+
 def _serialize_datetime(obj: Any) -> Any:
     if isinstance(obj, datetime):
         return obj.isoformat()

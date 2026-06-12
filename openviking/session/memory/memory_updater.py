@@ -28,7 +28,11 @@ from openviking.session.memory.dataclass import (
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.merge_op import MergeOpFactory
 from openviking.session.memory.page_id_map import PageIdMap
-from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking.session.memory.utils.memory_file_utils import (
+    MemoryFileUtils,
+    bump_memory_version,
+    next_memory_version,
+)
 from openviking.session.memory.utils.template_utils import TemplateUtils
 from openviking.session.memory.utils.uri import render_template
 from openviking.storage.viking_fs import get_viking_fs
@@ -89,6 +93,7 @@ async def write_stored_links(
                 mf.backlinks = merge_links(
                     mf.backlinks, [l.model_dump() for l in link_groups["backlinks"]]
                 )
+            bump_memory_version(mf)
             await viking_fs.write_file(uri, MemoryFileUtils.write(mf), ctx=ctx)
         except Exception as e:
             tracer.error(f"Failed to apply links to {uri}: {e}")
@@ -717,6 +722,8 @@ class MemoryUpdater:
                 for key, val in old_content.extra_fields.items():
                     if key not in schema_field_names and key not in metadata and val is not None:
                         metadata[key] = val
+
+            metadata["version"] = next_memory_version(old_content)
 
             # Handle links/backlinks fields: merge with existing
             incoming_links_by_uri = getattr(resolved_op, "_incoming_links_by_uri", {})

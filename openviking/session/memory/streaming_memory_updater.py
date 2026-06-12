@@ -41,7 +41,7 @@ from openviking.session.memory.patch_merge_context_provider import (
     PatchMergeContextProvider,
     PatchMergePatch,
 )
-from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils, next_memory_version
 from openviking.session.memory.utils.streaming_batcher import (
     StreamingBatcher,
     StreamingBatcherConfig,
@@ -845,6 +845,7 @@ def render_operation_after_file_content(
         for key, value in old_content.extra_fields.items():
             if key not in schema_field_names and key not in metadata and value is not None:
                 metadata[key] = value
+    metadata["version"] = next_memory_version(old_content)
     metadata.setdefault("memory_type", op.memory_type)
     mf = MemoryFile.from_parsed(uri=_first_uri(op.uris), parsed=dict(metadata))
     return MemoryFileUtils.write(
