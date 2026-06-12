@@ -371,13 +371,13 @@ if [ -n "$RETRY_WRONG" ]; then
         "$INPUT_FILE" \
         --output "$RESULT_FILE" \
         --retry-wrong "$RETRY_WRONG" \
-        --threads 20 \
+        --threads 200 \
         --config "$OPENVIKING_CONFIG_FILE" \
         "${COMMON_OPTS[@]}"
 
     # 裁判打分
     echo "[3/3] 裁判打分..."
-    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$RESULT_FILE" --parallel 20
+    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$RESULT_FILE" --parallel 200
 
     # 统计结果
     "$PYTHON_BIN" "$SCRIPT_DIR/stat_judge_result.py" --input "$RESULT_FILE"
@@ -418,7 +418,7 @@ if [ -z "$SAMPLE" ]; then
 
     # 裁判打分
     echo "[3/4] 裁判打分..."
-    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$RESULT_FILE" --parallel 40
+    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$RESULT_FILE" --parallel 200
 
     # 计算结果
     echo "[4/4] 计算结果..."
@@ -517,7 +517,7 @@ if [ -n "$QUESTION_INDEX" ]; then
     else
         echo "[3/3] Running judge..."
     fi
-    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$OUTPUT_FILE" --parallel 1
+    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$OUTPUT_FILE" --parallel 200
 
     # 输出结果
     echo ""
@@ -612,7 +612,7 @@ PY
         "$INPUT_FILE" \
         --sample "$SAMPLE_ID_FOR_CMD" \
         --output "$OUTPUT_FILE" \
-        --threads 50 \
+        --threads 200 \
         --config "$OPENVIKING_CONFIG_FILE" \
         "${COMMON_OPTS[@]}"
 
@@ -622,7 +622,7 @@ PY
     else
         echo "[3/4] Running judge..."
     fi
-    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$OUTPUT_FILE" --parallel 40
+    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$OUTPUT_FILE" --parallel 200
 
     # 输出统计结果
     if [ "$SKIP_IMPORT" = "true" ]; then
