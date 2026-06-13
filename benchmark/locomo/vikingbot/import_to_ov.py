@@ -25,6 +25,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import openviking as ov
 
+from progress_utils import (
+    AsyncProgressTracker,
+    make_three_state_progress,
+    should_show_progress,
+)
+
 
 TRACE_ID_RE = re.compile(r"\btrace_id=([^,\s:]+)")
 
@@ -252,6 +258,22 @@ def record_failed_trace_id(result: Dict[str, Any], failed_trace_ids: list[str]) 
     trace_id = result.get("trace_id") or extract_trace_id_from_error(result.get("error", ""))
     if trace_id:
         failed_trace_ids.append(str(trace_id))
+
+
+def record_success_trace_id(result: Dict[str, Any], success_trace_ids: list[str]) -> None:
+    trace_id = result.get("trace_id")
+    if trace_id:
+        success_trace_ids.append(str(trace_id))
+
+
+class _NullCtx:
+    """No-op context manager for the non-progress path."""
+
+    def __enter__(self):
+        return None
+
+    def __exit__(self, *args):
+        return False
 
 
 def load_ingest_record(record_path: str = "./result/.ingest_record.json") -> Dict[str, Any]:
@@ -491,10 +513,11 @@ async def process_single_session(
         cache_tokens = token_usage.get("cache", 0)
         reasoning_tokens = token_usage.get("reasoning", 0)
         llm_output_tokens = token_usage.get("llm_output", 0)
-        print(
-            f"    -> [COMPLETED] [{csv_id}/{session_key}] duration={duration_seconds}s, embed={embedding_tokens}, vlm={vlm_tokens}, cache={cache_tokens}, reasoning={reasoning_tokens}, completion={llm_output_tokens}, task_id={task_id}, trace_id={trace_id}",
-            file=sys.stderr,
-        )
+        if not getattr(args, "_show_progress", False):
+            print(
+                f"    -> [COMPLETED] [{csv_id}/{session_key}] duration={duration_seconds}s, embed={embedding_tokens}, vlm={vlm_tokens}, cache={cache_tokens}, reasoning={reasoning_tokens}, completion={llm_output_tokens}, task_id={task_id}, trace_id={trace_id}",
+                file=sys.stderr,
+            )
 
         # Write success record
         result = {
@@ -526,8 +549,9 @@ async def process_single_session(
 
     except Exception as e:
         error_message = f"{type(e).__name__}: {e}" if str(e) else repr(e)
-        print(f"    -> [ERROR] [{csv_id}/{session_key}] {error_message}", file=sys.stderr)
-        traceback.print_exc(file=sys.stderr)
+        if not getattr(args, "_show_progress", False):
+            print(f"    -> [ERROR] [{csv_id}/{session_key}] {error_message}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
 
         # Write error record
         result = {
@@ -663,13 +687,27 @@ async def run_import(args: argparse.Namespace) -> None:
     total_reasoning_tokens = 0
     total_llm_output_tokens = 0
     failed_trace_ids: list[str] = []
+    success_trace_ids: list[str] = []
     tasks = []
+    progress_tracker: AsyncProgressTracker | None = None
+    progress = None
+    show_progress = should_show_progress(args.no_progress)
+    args._show_progress = show_progress
     session_semaphore = asyncio.Semaphore(args.parallel_sessions) if args.parallel_sessions else None
     if args.parallel_sessions:
         print(
             f"[parallel-sessions] global concurrency={args.parallel_sessions}",
             file=sys.stderr,
         )
+
+    async def process_single_session_with_progress(**kwargs) -> Dict[str, Any]:
+        if progress_tracker is not None:
+            progress_tracker.job_started()
+        try:
+            return await process_single_session(**kwargs)
+        finally:
+            if progress_tracker is not None:
+                progress_tracker.job_finished()
 
     if args.input.endswith(".json"):
         # LoCoMo JSON format
@@ -721,6 +759,22 @@ async def run_import(args: argparse.Namespace) -> None:
 
             sample_info_list.append((sample_id, display_id, sessions))
 
+        import_task_count = sum(
+            1
+            for sample_id, _display_id, sessions in sample_info_list
+            for sess in sessions
+            if args.force_ingest
+            or not is_already_ingested(
+                sample_id,
+                sess["meta"]["session_key"],
+                ingest_record,
+                success_keys,
+            )
+        )
+        if show_progress:
+            progress, task_id = make_three_state_progress(description="Import")
+            progress_tracker = AsyncProgressTracker(progress, task_id, total=import_task_count)
+
         if session_semaphore is not None:
             # --- Round-robin 扁平调度：跨 sample 均衡分配并发槽位 ---
             # 每轮从每个 sample 各取一个 session，保证所有 sample 齐头并进
@@ -763,31 +817,40 @@ async def run_import(args: argparse.Namespace) -> None:
                 if not args.force_ingest and is_already_ingested(
                     sample_id, session_key, ingest_record, success_keys
                 ):
-                    print(
-                        f"  [{label}] [SKIP] already imported (use --force-ingest to reprocess)",
-                        file=sys.stderr,
-                    )
+                    if not show_progress:
+                        print(
+                            f"  [{label}] [SKIP] already imported (use --force-ingest to reprocess)",
+                            file=sys.stderr,
+                        )
                     return {"status": "skipped"}
 
                 # Preview messages
                 preview = " | ".join(
                     [f"{msg['role']}: {msg['text'][:30]}..." for msg in messages[:3]]
                 )
-                print(f"  [{label}] {preview}", file=sys.stderr)
+                if not show_progress:
+                    print(f"  [{label}] {preview}", file=sys.stderr)
+                if progress_tracker is not None:
+                    progress_tracker.job_started()
 
-                result = await process_single_session(
-                    messages=messages,
-                    sample_id=sample_id,
-                    display_id=display_id,
-                    session_key=session_key,
-                    meta=meta,
-                    run_time=run_time,
-                    ingest_record=ingest_record,
-                    args=args,
-                )
+                try:
+                    result = await process_single_session(
+                        messages=messages,
+                        sample_id=sample_id,
+                        display_id=display_id,
+                        session_key=session_key,
+                        meta=meta,
+                        run_time=run_time,
+                        ingest_record=ingest_record,
+                        args=args,
+                    )
+                finally:
+                    if progress_tracker is not None:
+                        progress_tracker.job_finished()
 
                 if result.get("status") == "success":
                     success_count += 1
+                    record_success_trace_id(result, success_trace_ids)
                     total_embedding_tokens += result.get("embedding_tokens", 0)
                     total_vlm_tokens += result.get("vlm_tokens", 0)
                     total_cache_tokens += result.get("cache_tokens", 0)
@@ -838,28 +901,36 @@ async def run_import(args: argparse.Namespace) -> None:
                     if not args.force_ingest and is_already_ingested(
                         sample_id, session_key, ingest_record, success_keys
                     ):
-                        print(
-                            f"  [{label}] [SKIP] already imported (use --force-ingest to reprocess)",
-                            file=sys.stderr,
-                        )
+                        if not show_progress:
+                            print(
+                                f"  [{label}] [SKIP] already imported (use --force-ingest to reprocess)",
+                                file=sys.stderr,
+                            )
                         return {"status": "skipped"}
 
                     # Preview messages
                     preview = " | ".join(
                         [f"{msg['role']}: {msg['text'][:30]}..." for msg in messages[:3]]
                     )
-                    print(f"  [{label}] {preview}", file=sys.stderr)
+                    if not show_progress:
+                        print(f"  [{label}] {preview}", file=sys.stderr)
+                    if progress_tracker is not None:
+                        progress_tracker.job_started()
 
-                    return await process_single_session(
-                        messages=messages,
-                        sample_id=sample_id,
-                        display_id=display_id,
-                        session_key=session_key,
-                        meta=meta,
-                        run_time=run_time,
-                        ingest_record=ingest_record,
-                        args=args,
-                    )
+                    try:
+                        return await process_single_session(
+                            messages=messages,
+                            sample_id=sample_id,
+                            display_id=display_id,
+                            session_key=session_key,
+                            meta=meta,
+                            run_time=run_time,
+                            ingest_record=ingest_record,
+                            args=args,
+                        )
+                    finally:
+                        if progress_tracker is not None:
+                            progress_tracker.job_finished()
 
                 session_results = []
                 for sess in sessions:
@@ -872,6 +943,7 @@ async def run_import(args: argparse.Namespace) -> None:
                         continue
                     if res.get("status") == "success":
                         success_count += 1
+                        record_success_trace_id(res, success_trace_ids)
                         total_embedding_tokens += res.get("embedding_tokens", 0)
                         total_vlm_tokens += res.get("vlm_tokens", 0)
                         total_cache_tokens += res.get("cache_tokens", 0)
@@ -906,18 +978,30 @@ async def run_import(args: argparse.Namespace) -> None:
         # Plain text format
         sessions = parse_test_file(args.input)
         print(f"Found {len(sessions)} session(s) in text file", file=sys.stderr)
+        text_session_keys = [f"txt-session-{idx}" for idx in range(1, len(sessions) + 1)]
+        import_task_count = sum(
+            1
+            for session_key in text_session_keys
+            if args.force_ingest
+            or not is_already_ingested("txt", session_key, ingest_record, success_keys)
+        )
+        if show_progress:
+            progress, task_id = make_three_state_progress(description="Import")
+            progress_tracker = AsyncProgressTracker(progress, task_id, total=import_task_count)
 
         for idx, session in enumerate(sessions, start=1):
-            session_key = f"txt-session-{idx}"
-            print(f"\n=== Text Session {idx} ===", file=sys.stderr)
+            session_key = text_session_keys[idx - 1]
+            if not show_progress:
+                print(f"\n=== Text Session {idx} ===", file=sys.stderr)
 
             # Skip already ingested sessions unless force-ingest is enabled
             if not args.force_ingest and is_already_ingested(
                 "txt", session_key, ingest_record, success_keys
             ):
-                print(
-                    "  [SKIP] already imported (use --force-ingest to reprocess)", file=sys.stderr
-                )
+                if not show_progress:
+                    print(
+                        "  [SKIP] already imported (use --force-ingest to reprocess)", file=sys.stderr
+                    )
                 skipped_count += 1
                 continue
 
@@ -935,11 +1019,12 @@ async def run_import(args: argparse.Namespace) -> None:
                 )
 
             preview = " | ".join([f"{msg['role']}: {msg['text'][:30]}..." for msg in messages[:3]])
-            print(f"  {preview}", file=sys.stderr)
+            if not show_progress:
+                print(f"  {preview}", file=sys.stderr)
 
             # 创建异步任务
             task = asyncio.create_task(
-                process_single_session(
+                process_single_session_with_progress(
                     messages=messages,
                     sample_id="txt",
                     display_id=f"txt_{idx}",
@@ -957,7 +1042,9 @@ async def run_import(args: argparse.Namespace) -> None:
         f"\n[INFO] Starting import with {len(tasks)} tasks to process",
         file=sys.stderr,
     )
-    task_results = await asyncio.gather(*tasks, return_exceptions=True)
+    ctx = progress if show_progress and progress is not None else _NullCtx()
+    with ctx:
+        task_results = await asyncio.gather(*tasks, return_exceptions=True)
 
     # 统计纯文本路径的结果（JSON 路径已在 process_sample 内统计）
     if not args.input.endswith(".json"):
@@ -968,6 +1055,7 @@ async def run_import(args: argparse.Namespace) -> None:
             if isinstance(r, dict):
                 if r.get("status") == "success":
                     success_count += 1
+                    record_success_trace_id(r, success_trace_ids)
                     total_embedding_tokens += r.get("embedding_tokens", 0)
                     total_vlm_tokens += r.get("vlm_tokens", 0)
                     total_llm_output_tokens += r.get("llm_output_tokens", 0)
@@ -982,10 +1070,10 @@ async def run_import(args: argparse.Namespace) -> None:
     print(f"Successfully imported: {success_count}", file=sys.stderr)
     print(f"Failed: {error_count}", file=sys.stderr)
     print(f"Skipped (already imported): {skipped_count}", file=sys.stderr)
+    if success_trace_ids:
+        print(f"Success trace IDs: {' '.join(success_trace_ids)}", file=sys.stderr)
     if failed_trace_ids:
-        print("Failed trace IDs:", file=sys.stderr)
-        for trace_id in failed_trace_ids:
-            print(trace_id, file=sys.stderr)
+        print(f"Failed trace IDs: {' '.join(failed_trace_ids)}", file=sys.stderr)
     print("\n=== Token usage summary ===", file=sys.stderr)
     print(f"Total Embedding tokens: {total_embedding_tokens}", file=sys.stderr)
     print(f"Total VLM tokens: {total_vlm_tokens}", file=sys.stderr)
@@ -1126,6 +1214,11 @@ def main():
         "--retry-wrong",
         default=None,
         help="Path to a judged result CSV. Only import sessions needed by valid wrong questions.",
+    )
+    parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Disable the live progress bar (fall back to line-by-line logs). Auto-disabled when stderr is not a TTY.",
     )
     args = parser.parse_args()
 
