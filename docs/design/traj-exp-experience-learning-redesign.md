@@ -84,6 +84,8 @@ class Experience:
     status: PolicyStatus
     content: str
     metadata: dict[str, Any] = field(default_factory=dict)
+    links: list[dict[str, Any]] = field(default_factory=list)
+    backlinks: list[dict[str, Any]] = field(default_factory=list)
 ```
 
 `ExperienceSet` 是某个 experiences 根目录的快照：
@@ -108,6 +110,7 @@ async with policy_set.lock():
 约定：
 
 - `root_uri` 是 experiences 目录 URI。
+- `links/backlinks` 对应 memory file 中的 `MEMORY_FIELDS.links/backlinks`，用于在 train 域快照内保留 v2 link 协议数据。
 - `policies` 是当前目录下所有 experience 文件解析后的快照。
 - `viking_fs` / `request_context` 是运行时依赖，用于 `lock()` 和 `reload()`，不参与 equality/repr。
 - `PolicyTrainingEngine.plan_and_apply(...)` 会先加 policy tree lock，再 reload 最新 policy set，然后 plan/apply。
@@ -234,7 +237,7 @@ class SemanticGradient(Protocol):
     @property
     def rationale(self) -> str: ...
     @property
-    def evidence_trajectory_uris(self) -> list[str]: ...
+    def links(self) -> list[StoredLink]: ...
     @property
     def confidence(self) -> float: ...
     @property
@@ -250,7 +253,7 @@ class PatchSemanticGradient:
     after_file: MemoryFile
     base_version: int | None
     rationale: str
-    evidence_trajectory_uris: list[str]
+    links: list[StoredLink]
     confidence: float
     metadata: dict[str, Any] = field(default_factory=dict)
 ```
@@ -259,6 +262,7 @@ class PatchSemanticGradient:
 
 - `before_file is None` 表示建议新建。
 - `after_file` 是建议的目标 memory file 状态。
+- `links` 承载 exp→traj 的 provenance，沿用 v2 `MEMORY_FIELDS.links/backlinks` 协议；来源轨迹关系使用 `StoredLink(from_uri=exp_uri, to_uri=traj_uri, link_type="derived_from", weight=1.0)`，不再引入单独的轨迹 URI 列表字段。
 - patch 文本不是 gradient 自身字段，而是由 `PatchMergeContextProvider` 在 merge 阶段把 before/after memory file 渲染为字段级 unified diff。
 
 ## 5. PolicyUpdatePlan / PolicyUpdater
@@ -277,7 +281,7 @@ class PolicyPlanItem:
     after_content: str | None
     base_version: int | None = None
     confidence: float | None = None
-    evidence_trajectory_uris: list[str] = field(default_factory=list)
+    links: list[StoredLink] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
 @dataclass(slots=True)
@@ -742,14 +746,14 @@ train/eval runner
 位置：
 
 ```text
-benchmark/tau2/service/app.py
-benchmark/tau2/service/run_service.sh
+benchmark/tau2/train/service_app.py
+benchmark/tau2/train/run_service.sh
 ```
 
 启动：
 
 ```bash
-benchmark/tau2/service/run_service.sh \
+benchmark/tau2/train/run_service.sh \
   --host 127.0.0.1 \
   --port 1944
 ```
@@ -760,28 +764,38 @@ benchmark/tau2/service/run_service.sh \
 
 ```text
 benchmark/tau2/train/run_batch_train_eval.sh
-benchmark/tau2/train/run_batch_train_eval_remote.sh
-benchmark/tau2/train/run_batch_train_eval.py
-benchmark/tau2/train/runner.py
+openviking/session/train/run_batch_train_eval.py
+openviking/session/train/batch_runner.py
 ```
 
-示例：
+预先只跑 test 分数（不训练）：
 
 ```bash
 benchmark/tau2/train/run_batch_train_eval.sh \
-  --domain airline \
-  --epochs 1 \
-  --concurrency 1 \
-  --train-limit 1 \
-  --eval-limit 1
+  --epochs 0 \
+  --eval-limit 25 \
+  --trials 8
 ```
 
-输出以 accuracy 为主：
+训练前先跑一次 test baseline，再训练并跑最终 test：
+
+```bash
+benchmark/tau2/train/run_batch_train_eval.sh \
+  --baseline-eval \
+  --epochs 4 \
+  --train-limit 25 \
+  --eval-limit 25 \
+  --trials 8
+```
+
+输出以 accuracy 为主，阶段日志由 session/train lifecycle hooks 统一输出：
 
 ```text
-[baseline_eval] epoch=-1 cases=1 accuracy=0.00% passed=0/1 avg_reward=0.000000
-[train_epoch] epoch=0 cases=1 accuracy=0.00% passed=0/1 avg_reward=0.000000 commits=1 errors=0
-[final_eval] epoch=1 cases=1 accuracy=0.00% passed=0/1 avg_reward=0.000000
+[baseline_rollout] epoch=-1 trials=8 cases_per_trial=25 total_rollouts=200 accuracy=... ± ... avg_reward=... ± ...
+================= epoch 0 =================
+[train_rollout] epoch=0 cases=25 accuracy=... passed=... avg_reward=...
+[train] epoch=0 commits=25 errors=0
+[final_test_rollout] epoch=4 trials=8 cases_per_trial=25 total_rollouts=200 accuracy=... ± ... avg_reward=... ± ...
 ```
 
 ### 14.4 tau2 rollout messages
@@ -993,7 +1007,7 @@ POST /v1/cases/query
 tau2 中对应实现是：
 
 ```text
-benchmark/tau2/service/app.py::query_cases
+benchmark/tau2/train/service_app.py::query_cases
 benchmark/tau2/train/case_loader.py::Tau2CaseLoader
 ```
 
@@ -1055,8 +1069,8 @@ POST /v1/rollouts/execute
 tau2 中对应实现是：
 
 ```text
-benchmark/tau2/service/app.py::execute_rollout
-benchmark/tau2/service/app.py::_run_rollout_execution
+benchmark/tau2/train/service_app.py::execute_rollout
+benchmark/tau2/train/service_app.py::_run_rollout_execution
 benchmark/tau2/train/rollout_executor.py::Tau2RolloutExecutor
 ```
 

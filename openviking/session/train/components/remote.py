@@ -128,10 +128,15 @@ class RemoteRolloutExecutor:
         context: ExecutionContext,
     ) -> list[Rollout]:
         case_list = list(cases)
+        stage_label = _progress_stage_label(
+            context.metadata.get("stage"),
+            default=self.progress_label,
+        )
         progress = ProgressPrinter(
             total=len(case_list),
-            label=self.progress_label,
+            label=stage_label,
             enabled=self.show_progress,
+            description=f"Running {len(case_list)} rollouts, concurrency={self.concurrency}",
         )
         progress.render()
         semaphore = asyncio.Semaphore(self.concurrency)
@@ -182,8 +187,23 @@ class RemoteRolloutExecutor:
         case: Case,
     ) -> Rollout:
         deadline = asyncio.get_running_loop().time() + self.execution_timeout_seconds
+        transient_errors = 0
+        last_transient_error: BaseException | None = None
         while True:
-            response = await client.get(f"/v1/rollouts/executions/{execution_id}")
+            try:
+                response = await client.get(f"/v1/rollouts/executions/{execution_id}")
+                transient_errors = 0
+            except (httpx.ReadError, httpx.ConnectError, httpx.RemoteProtocolError, httpx.TimeoutException) as exc:
+                transient_errors += 1
+                last_transient_error = exc
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise TimeoutError(
+                        f"rollout execution {execution_id} polling timed out for case {case.name} "
+                        f"after {self.execution_timeout_seconds}s; last polling error: "
+                        f"{type(exc).__name__}: {exc}"
+                    ) from exc
+                await asyncio.sleep(min(self.poll_interval_seconds * transient_errors, 10.0))
+                continue
             response.raise_for_status()
             data = response.json()
             status = data.get("status")
@@ -198,11 +218,37 @@ class RemoteRolloutExecutor:
                     f"{data.get('error') or 'unknown error'}"
                 )
             if asyncio.get_running_loop().time() >= deadline:
+                last_error_text = (
+                    f"; last polling error: {type(last_transient_error).__name__}: "
+                    f"{last_transient_error}"
+                    if last_transient_error is not None
+                    else ""
+                )
                 raise TimeoutError(
                     f"rollout execution {execution_id} timed out for case {case.name} "
-                    f"after {self.execution_timeout_seconds}s"
+                    f"after {self.execution_timeout_seconds}s{last_error_text}"
                 )
             await asyncio.sleep(self.poll_interval_seconds)
+
+
+def _progress_stage_label(stage: Any, *, default: str) -> str:
+    stage_text = str(stage or "")
+    stage_name = stage_text.split(maxsplit=1)[0]
+    if stage_name in {
+        "train_rollout",
+        "test_rollout",
+        "baseline_test_rollout",
+        "final_test_rollout",
+    }:
+        return f"{stage_name}_start"
+    if stage_name in {
+        "train_rollout_start",
+        "test_rollout_start",
+        "baseline_test_rollout_start",
+        "final_test_rollout_start",
+    }:
+        return stage_name
+    return default
 
 
 def _remote_execution_options(options: dict[str, Any]) -> dict[str, Any]:

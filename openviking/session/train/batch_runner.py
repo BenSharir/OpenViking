@@ -1,59 +1,64 @@
-#!/usr/bin/env python3
-"""Tau2 batch train/eval orchestration through OfflinePolicyOptimizationPipeline."""
+"""Generic remote benchmark batch train/eval orchestration."""
 
 from __future__ import annotations
 
 import json
 import os
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from openviking.server.config import load_server_config
 from openviking.server.identity import AuthMode
-from openviking.session.train import (
-    ContentHashPolicySnapshotter,
+from openviking.session.train.components.rollout_artifact_recorder import RolloutArtifactRecorder
+from openviking.session.train.components.remote import RemoteCaseLoader, RemoteRolloutExecutor
+from openviking.session.train.components.report_builder import PipelineReportBuilder
+from openviking.session.train.components.reporter import emit_run_summary
+from openviking.session.train.components.session_commit import SessionCommitPolicyTrainer
+from openviking.session.train.components.snapshotter import ContentHashPolicySnapshotter
+from openviking.session.train.context import PipelineContext
+from openviking.session.train.domain import (
     ExperienceSet,
-    OfflinePolicyOptimizationPipeline,
-    PipelineContext,
-    PipelineEvaluationResult,
-    PipelineResult,
+    PolicyUpdatePlan,
     Rollout,
     RolloutAnalysis,
-    SessionCommitPolicyTrainer,
 )
-from openviking.session.train.components.remote import RemoteCaseLoader, RemoteRolloutExecutor
-from openviking.session.train.domain import PolicyUpdatePlan
+from openviking.session.train.pipeline import OfflinePolicyOptimizationPipeline
 from openviking.telemetry import tracer
 from openviking_cli.client.http import AsyncHTTPClient
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 
 
 @dataclass(slots=True)
-class Tau2BatchRunConfig:
-    """Configuration for one tau2 batch train/eval run."""
+class BatchTrainEvalConfig:
+    """Configuration for one remote benchmark batch train/eval run."""
 
     domain: str
-    dataset: str = "tau2"
+    dataset: str
     epochs: int = 1
     batch_size: int | None = None
-    concurrency: int = 20
+    concurrency: int = 150
     config_path: str | None = None
     output_path: str | None = None
     keep_default_tools: bool = True
     max_iterations: int = 30
+    rollout_backend: str = "native"
     server_url: str | None = None
     api_key: str | None = None
     account_id: str = "default"
     user_id: str = "default"
     commit_keep_recent_count: int = 0
     commit_poll_interval_seconds: float = 2.0
-    commit_timeout_seconds: float = 600.0
-    commit_concurrency: int = 20
+    commit_timeout_seconds: float | None = None
+    commit_concurrency: int = 100
     train_limit: int | None = None
     eval_limit: int | None = None
     benchmark_service_url: str | None = None
     baseline_eval_enabled: bool = False
+    eval_each_epoch: bool = False
+    trials: int = 8
+    run_timestamp: str = field(default_factory=lambda: datetime.now().strftime("%Y%m%d_%H%M%S"))
 
     def __post_init__(self) -> None:
         if not self.dataset:
@@ -68,9 +73,11 @@ class Tau2BatchRunConfig:
             raise ValueError("concurrency must be > 0")
         if self.max_iterations <= 0:
             raise ValueError("max_iterations must be > 0")
+        if self.rollout_backend not in {"native", "vikingbot"}:
+            raise ValueError("rollout_backend must be native or vikingbot")
         if self.commit_poll_interval_seconds <= 0:
             raise ValueError("commit_poll_interval_seconds must be > 0")
-        if self.commit_timeout_seconds <= 0:
+        if self.commit_timeout_seconds is not None and self.commit_timeout_seconds <= 0:
             raise ValueError("commit_timeout_seconds must be > 0")
         if self.commit_concurrency <= 0:
             raise ValueError("commit_concurrency must be > 0")
@@ -78,13 +85,15 @@ class Tau2BatchRunConfig:
             raise ValueError("train_limit must be > 0")
         if self.eval_limit is not None and self.eval_limit <= 0:
             raise ValueError("eval_limit must be > 0")
+        if self.trials <= 0:
+            raise ValueError("trials must be > 0")
         if self.benchmark_service_url is not None and not self.benchmark_service_url.strip():
             raise ValueError("benchmark_service_url must not be empty")
 
 
 @dataclass(slots=True)
-class Tau2BatchRunReport:
-    """Serializable report for tau2 batch train/eval."""
+class BatchTrainEvalReport:
+    """Serializable report for remote benchmark batch train/eval."""
 
     dataset: str
     domain: str
@@ -105,6 +114,11 @@ class Tau2BatchRunReport:
     server_url: str = ""
     benchmark_service_url: str | None = None
     baseline_eval_enabled: bool = False
+    eval_each_epoch: bool = False
+    trials: int = 8
+    rollouts_root: str | None = None
+    rollouts_index_path: str | None = None
+    latest_failed_rollout: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -127,12 +141,17 @@ class Tau2BatchRunReport:
             "server_url": self.server_url,
             "benchmark_service_url": self.benchmark_service_url,
             "baseline_eval_enabled": self.baseline_eval_enabled,
+            "eval_each_epoch": self.eval_each_epoch,
+            "trials": self.trials,
+            "rollouts_root": self.rollouts_root,
+            "rollouts_index_path": self.rollouts_index_path,
+            "latest_failed_rollout": self.latest_failed_rollout,
         }
 
 
-@tracer("tau2.batch_train_eval.run", ignore_result=True, ignore_args=True)
-async def run_tau2_batch_train_eval(config: Tau2BatchRunConfig) -> Tau2BatchRunReport:
-    """Run baseline eval, commit-based train epochs, and final eval for one tau2 domain."""
+@tracer("train.batch_train_eval.run", ignore_result=True, ignore_args=True)
+async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalReport:
+    """Run baseline eval, commit-based train epochs, and final eval for one dataset/domain."""
 
     _configure_openviking_config(config.config_path)
     client = _build_http_client(config)
@@ -142,7 +161,7 @@ async def run_tau2_batch_train_eval(config: Tau2BatchRunConfig) -> Tau2BatchRunR
         policy_set = ExperienceSet(
             root_uri=policy_root_uri,
             policies=[],
-            metadata={"source": "remote_session_commit"},
+            metadata=_policy_set_metadata(config, client),
         )
         policy_trainer = SessionCommitPolicyTrainer(
             client=client,
@@ -154,43 +173,99 @@ async def run_tau2_batch_train_eval(config: Tau2BatchRunConfig) -> Tau2BatchRunR
             progress_label="train",
         )
         pipeline = _build_pipeline(config, policy_trainer)
+        run_dir = _run_output_dir(config)
+        rollout_artifact_recorder = RolloutArtifactRecorder(
+            run_dir=run_dir,
+            client=client,
+            latest_pointer_path=_latest_rollouts_path(config),
+        )
 
         baseline_eval: dict[str, Any] | None = None
         final_eval: dict[str, Any] | None = None
-        train_epoch_reports: list[dict[str, Any]] = []
+        report_builder = PipelineReportBuilder(trial_index_key="eval_trial")
 
         test_loader = _case_loader(config, split="test", limit=config.eval_limit)
         if config.baseline_eval_enabled and await test_loader.split_exists():
             baseline_result = await pipeline.eval(
                 case_loader=test_loader,
                 policy_set=policy_set,
-                context=_pipeline_context(epoch=-1, training=False),
+                context=_pipeline_context(
+                    epoch=-1,
+                    training=False,
+                    max_epochs=1,
+                    rollout_stage="baseline_test_rollout",
+                    eval_split="test",
+                    eval_trials=config.trials,
+                    trial_index_key="eval_trial",
+                    report_builder=report_builder,
+                ),
             )
-            baseline_eval = _evaluation_report(baseline_result)
-            _print_eval_summary("baseline_eval", baseline_eval)
+            rollout_artifact_recorder.record_eval(
+                label="baseline_test_rollout",
+                epoch=-1,
+                analyses=baseline_result.analyses,
+            )
+            baseline_eval = baseline_result.metadata["report"]
 
-        for epoch in range(config.epochs):
-            train_loader = _case_loader(config, split="train", limit=config.train_limit)
-            result = await pipeline.train(
-                case_loader=train_loader,
-                policy_set=policy_set,
-                context=_pipeline_context(epoch=epoch, training=True),
+        train_loader = _case_loader(config, split="train", limit=config.train_limit)
+
+        train_context = _pipeline_context(
+            epoch=0,
+            training=True,
+            max_epochs=config.epochs,
+            eval_each_epoch_case_loader=test_loader
+            if config.eval_each_epoch and await test_loader.split_exists()
+            else None,
+            eval_trials=config.trials,
+            trial_index_key="eval_trial",
+            report_builder=report_builder,
+        )
+        train_result = await pipeline.train(
+            case_loader=train_loader,
+            policy_set=policy_set,
+            context=train_context,
+        )
+        policy_set = train_result.apply_result.updated_policy_set
+        for epoch_result in train_result.epochs:
+            commit_results = list(epoch_result.apply_result.metadata.get("commit_results", []))
+            await rollout_artifact_recorder.record_train_epoch(
+                epoch=epoch_result.epoch,
+                analyses=epoch_result.analyses,
+                commit_results=commit_results,
             )
-            epoch_report = _train_result_report(result, epoch=epoch)
-            train_epoch_reports.append(epoch_report)
-            _print_train_summary(epoch_report)
+        for eval_result in train_result.evaluation_passes:
+            label = str(eval_result.metadata.get("rollout_stage") or "test_rollout")
+            rollout_artifact_recorder.record_eval(
+                label=label,
+                epoch=eval_result.epoch,
+                analyses=eval_result.analyses,
+            )
 
         if await test_loader.split_exists():
             final_result = await pipeline.eval(
                 case_loader=test_loader,
                 policy_set=policy_set,
-                context=_pipeline_context(epoch=config.epochs, training=False),
+                context=_pipeline_context(
+                    epoch=config.epochs,
+                    training=False,
+                    max_epochs=1,
+                    rollout_stage="final_test_rollout",
+                    eval_split="test",
+                    eval_trials=config.trials,
+                    trial_index_key="eval_trial",
+                    report_builder=report_builder,
+                ),
             )
-            final_eval = _evaluation_report(final_result)
-            _print_eval_summary("final_eval", final_eval)
+            rollout_artifact_recorder.record_eval(
+                label="final_test_rollout",
+                epoch=config.epochs,
+                analyses=final_result.analyses,
+            )
+            final_eval = final_result.metadata["report"]
 
-        accuracy_delta = _accuracy_delta(baseline_eval, final_eval)
-        report = Tau2BatchRunReport(
+        accuracy_delta = report_builder.accuracy_delta(baseline_eval, final_eval)
+        rollout_artifact_index = rollout_artifact_recorder.finalize()
+        report = BatchTrainEvalReport(
             dataset=config.dataset,
             domain=config.domain,
             epochs=config.epochs,
@@ -201,7 +276,7 @@ async def run_tau2_batch_train_eval(config: Tau2BatchRunConfig) -> Tau2BatchRunR
             eval_limit=config.eval_limit,
             policy_root_uri=policy_root_uri,
             baseline_eval=baseline_eval,
-            train_epochs=train_epoch_reports,
+            train_epochs=list(train_result.metadata.get("train_reports", [])),
             final_eval=final_eval,
             accuracy_delta=accuracy_delta,
             output_path=_default_output_path(config),
@@ -210,9 +285,33 @@ async def run_tau2_batch_train_eval(config: Tau2BatchRunConfig) -> Tau2BatchRunR
             server_url=client_url(client),
             benchmark_service_url=config.benchmark_service_url,
             baseline_eval_enabled=config.baseline_eval_enabled,
+            eval_each_epoch=config.eval_each_epoch,
+            trials=config.trials,
+            rollouts_root=rollout_artifact_index.rollouts_root,
+            rollouts_index_path=str(run_dir / "rollouts_index.json"),
+            latest_failed_rollout=rollout_artifact_index.latest_failed_rollout,
         )
         _write_report(report, config)
-        _print_report_summary(report)
+        await emit_run_summary(
+            train_context,
+            title="batch train/eval",
+            fields={
+                "dataset": config.dataset,
+                "domain": config.domain,
+                "epochs": config.epochs,
+                "trials": config.trials,
+                "rollout_backend": config.rollout_backend,
+                "run_id": policy_trainer.run_id,
+                "trace_id": report.trace_id,
+            },
+            baseline_eval=baseline_eval,
+            final_eval=final_eval,
+            accuracy_delta=accuracy_delta,
+            output_path=report.output_path,
+            rollouts_root=report.rollouts_root,
+            rollouts_index_path=report.rollouts_index_path,
+            latest_failed_rollout=report.latest_failed_rollout,
+        )
         return report
     finally:
         await client.close()
@@ -224,7 +323,7 @@ def _configure_openviking_config(config_path: str | None) -> None:
     OpenVikingConfigSingleton.reset_instance()
 
 
-def _build_http_client(config: Tau2BatchRunConfig) -> AsyncHTTPClient:
+def _build_http_client(config: BatchTrainEvalConfig) -> AsyncHTTPClient:
     server_url = config.server_url
     api_key = config.api_key
     auth_mode: AuthMode | None = None
@@ -247,20 +346,30 @@ def _build_http_client(config: Tau2BatchRunConfig) -> AsyncHTTPClient:
         account=account,
         user=user,
         profile_enabled=False,
-        timeout=max(60.0, config.commit_timeout_seconds + 30.0),
+        timeout=max(60.0, (config.commit_timeout_seconds or 600.0) + 30.0),
     )
 
+
+
+def _policy_set_metadata(config: BatchTrainEvalConfig, client: AsyncHTTPClient) -> dict[str, Any]:
+    return {
+        "source": "remote_session_commit",
+        "openviking_url": client_url(client),
+        "openviking_api_key": getattr(client, "_api_key", None),
+        "openviking_account": config.account_id,
+        "openviking_user": config.user_id,
+    }
 
 def client_url(client: AsyncHTTPClient) -> str:
     return str(getattr(client, "_url", ""))
 
 
 def _build_pipeline(
-    config: Tau2BatchRunConfig,
+    config: BatchTrainEvalConfig,
     policy_trainer: SessionCommitPolicyTrainer,
 ) -> OfflinePolicyOptimizationPipeline:
     return OfflinePolicyOptimizationPipeline(
-        snapshotter=ContentHashPolicySnapshotter(prefix="tau2-policy-snapshot"),
+        snapshotter=ContentHashPolicySnapshotter(prefix=f"{config.dataset}-policy-snapshot"),
         rollout_executor=RemoteRolloutExecutor(
             service_url=_require_benchmark_service_url(config),
             concurrency=config.concurrency,
@@ -270,6 +379,7 @@ def _build_pipeline(
                 "config_path": config.config_path,
                 "keep_default_tools": config.keep_default_tools,
                 "max_iterations": config.max_iterations,
+                "rollout_backend": config.rollout_backend,
             },
         ),
         rollout_analyzer=UnusedRolloutAnalyzer(),
@@ -280,15 +390,35 @@ def _build_pipeline(
     )
 
 
-def _pipeline_context(*, epoch: int, training: bool) -> PipelineContext:
+def _pipeline_context(
+    *,
+    epoch: int,
+    training: bool,
+    max_epochs: int = 1,
+    rollout_stage: str | None = None,
+    eval_split: str | None = None,
+    eval_each_epoch_case_loader: Any = None,
+    eval_trials: int = 1,
+    trial_index_key: str = "trial",
+    report_builder: Any = None,
+) -> PipelineContext:
+    execution_metadata = {"epoch": epoch, "training": training}
+    if rollout_stage is not None:
+        execution_metadata["rollout_stage"] = rollout_stage
+    if eval_split is not None:
+        execution_metadata["eval_split"] = eval_split
     return PipelineContext(
         analysis_context={"epoch": epoch},
-        execution_metadata={"epoch": epoch, "training": training},
-        max_epochs=1,
+        execution_metadata=execution_metadata,
+        max_epochs=max_epochs,
+        eval_each_epoch_case_loader=eval_each_epoch_case_loader,
+        eval_trials=eval_trials,
+        trial_index_key=trial_index_key,
+        report_builder=report_builder,
     )
 
 
-def _case_loader(config: Tau2BatchRunConfig, *, split: str, limit: int | None) -> RemoteCaseLoader:
+def _case_loader(config: BatchTrainEvalConfig, *, split: str, limit: int | None) -> RemoteCaseLoader:
     return RemoteCaseLoader(
         service_url=_require_benchmark_service_url(config),
         dataset=config.dataset,
@@ -299,9 +429,12 @@ def _case_loader(config: Tau2BatchRunConfig, *, split: str, limit: int | None) -
     )
 
 
-def _require_benchmark_service_url(config: Tau2BatchRunConfig) -> str:
+def _require_benchmark_service_url(config: BatchTrainEvalConfig) -> str:
     if not config.benchmark_service_url:
-        raise ValueError("benchmark_service_url is required; start benchmark service and pass --benchmark-service-url")
+        raise ValueError(
+            "benchmark_service_url is required; start benchmark service and pass "
+            "--benchmark-service-url"
+        )
     return config.benchmark_service_url
 
 
@@ -325,121 +458,7 @@ class UnusedPolicyUpdater:
         raise RuntimeError("policy_trainer handles training; policy updater must not run")
 
 
-def _evaluation_report(result: PipelineEvaluationResult) -> dict[str, Any]:
-    rewards = [float(analysis.evaluation.score) for analysis in result.analyses]
-    passed_count = sum(1 for analysis in result.analyses if analysis.evaluation.passed)
-    case_count = len(result.analyses)
-    return {
-        "epoch": result.epoch,
-        "case_count": case_count,
-        "accuracy": _ratio(passed_count, case_count),
-        "passed_count": passed_count,
-        "average_reward": _average(rewards),
-        "rewards": rewards,
-        "snapshot_ids": list(result.policy_snapshot_ids),
-        "metadata": dict(result.metadata),
-        "memory_usage": _memory_usage_from_analyses(result.analyses),
-    }
-
-
-def _train_result_report(result: PipelineResult, *, epoch: int) -> dict[str, Any]:
-    rewards = [float(analysis.evaluation.score) for analysis in result.analyses]
-    passed_count = sum(1 for analysis in result.analyses if analysis.evaluation.passed)
-    case_count = len(result.analyses)
-    commit_results = [
-        item
-        for epoch_result in result.epochs
-        for item in epoch_result.apply_result.metadata.get("commit_results", [])
-    ]
-    errors = [error for item in commit_results if (error := item.get("error"))]
-    snapshot_ids = [sid for item in result.epochs for sid in item.policy_snapshot_ids]
-    return {
-        "epoch": epoch,
-        "case_count": case_count,
-        "accuracy": _ratio(passed_count, case_count),
-        "passed_count": passed_count,
-        "average_reward": _average(rewards),
-        "batch_count": len(snapshot_ids),
-        "gradient_count": len(result.gradients),
-        "committed_rollout_count": len(commit_results),
-        "errors": errors,
-        "snapshot_ids": snapshot_ids,
-        "commit_results": commit_results,
-        "metadata": dict(result.metadata),
-        "memory_usage": _memory_usage_from_analyses(result.analyses),
-    }
-
-
-def _memory_usage_from_analyses(analyses: list[RolloutAnalysis]) -> dict[str, Any]:
-    rollouts = [
-        rollout
-        for analysis in analyses
-        if isinstance((rollout := analysis.metadata.get("rollout")), Rollout)
-    ]
-    rollout_count = len(rollouts)
-    memory_context_count = 0
-    memory_tool_call_rollout_count = 0
-    memory_tool_call_total = 0
-    for rollout in rollouts:
-        metadata = rollout.metadata or {}
-        if str(metadata.get("memory") or "").strip():
-            memory_context_count += 1
-        tool_call_count = _memory_tool_call_count(metadata.get("tools_used"))
-        if tool_call_count:
-            memory_tool_call_rollout_count += 1
-            memory_tool_call_total += tool_call_count
-    return {
-        "rollout_count": rollout_count,
-        "memory_context_count": memory_context_count,
-        "memory_context_ratio": _ratio(memory_context_count, rollout_count),
-        "memory_tool_call_rollout_count": memory_tool_call_rollout_count,
-        "memory_tool_call_rollout_ratio": _ratio(
-            memory_tool_call_rollout_count,
-            rollout_count,
-        ),
-        "memory_tool_call_total": memory_tool_call_total,
-    }
-
-
-def _memory_tool_call_count(tools_used: Any) -> int:
-    if not isinstance(tools_used, list):
-        return 0
-    count = 0
-    for tool_info in tools_used:
-        if not isinstance(tool_info, dict):
-            continue
-        tool_name = str(tool_info.get("tool_name") or "")
-        if tool_name.startswith("openviking"):
-            count += 1
-    return count
-
-
-def _accuracy_delta(
-    baseline_eval: dict[str, Any] | None,
-    final_eval: dict[str, Any] | None,
-) -> float | None:
-    if not baseline_eval or not final_eval:
-        return None
-    baseline = baseline_eval.get("accuracy")
-    final = final_eval.get("accuracy")
-    if baseline is None or final is None:
-        return None
-    return float(final) - float(baseline)
-
-
-def _average(values: list[float]) -> float | None:
-    if not values:
-        return None
-    return sum(values) / len(values)
-
-
-def _ratio(numerator: int, denominator: int) -> float | None:
-    if denominator <= 0:
-        return None
-    return numerator / denominator
-
-
-def _write_report(report: Tau2BatchRunReport, config: Tau2BatchRunConfig) -> None:
+def _write_report(report: BatchTrainEvalReport, config: BatchTrainEvalConfig) -> None:
     output_path = Path(_default_output_path(config)).expanduser()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
@@ -449,80 +468,28 @@ def _write_report(report: Tau2BatchRunReport, config: Tau2BatchRunConfig) -> Non
     report.output_path = str(output_path)
 
 
-def _default_output_path(config: Tau2BatchRunConfig) -> str:
+def _default_output_path(config: BatchTrainEvalConfig) -> str:
     if config.output_path:
         return str(Path(config.output_path).expanduser())
-    return str(
-        Path(__file__).resolve().parent
+    return str(_run_output_dir(config) / "report.json")
+
+
+def _run_output_dir(config: BatchTrainEvalConfig) -> Path:
+    if config.output_path:
+        output_path = Path(config.output_path).expanduser()
+        return output_path.parent
+    return (
+        _repo_root()
         / "result"
-        / f"{config.domain}_batch_train_eval.json"
+        / config.dataset
+        / "train"
+        / f"{config.domain}_{config.run_timestamp}"
     )
 
 
-def _print_eval_summary(label: str, data: dict[str, Any]) -> None:
-    print(
-        f"[{label}] epoch={data['epoch']} cases={data['case_count']} "
-        f"accuracy={_fmt_percent(data['accuracy'])} "
-        f"passed={data['passed_count']}/{data['case_count']} "
-        f"avg_reward={_fmt_score(data['average_reward'])}"
-    )
+def _latest_rollouts_path(config: BatchTrainEvalConfig) -> Path:
+    return _repo_root() / "result" / config.dataset / "train" / "latest_rollouts"
 
 
-def _print_train_summary(data: dict[str, Any]) -> None:
-    print(
-        f"[train_epoch] epoch={data['epoch']} cases={data['case_count']} "
-        f"accuracy={_fmt_percent(data['accuracy'])} "
-        f"passed={data['passed_count']}/{data['case_count']} "
-        f"avg_reward={_fmt_score(data['average_reward'])} "
-        f"commits={data['committed_rollout_count']} errors={len(data['errors'])}"
-    )
-
-
-def _print_report_summary(report: Tau2BatchRunReport) -> None:
-    print("==== Tau2 Batch Train/Eval Report ====")
-    print(f"dataset: {report.dataset}")
-    print(f"domain: {report.domain}")
-    print(f"epochs: {report.epochs}")
-    print(f"commit_concurrency: {report.commit_concurrency}")
-    print(f"run_id: {report.run_id}")
-    print(f"server_url: {report.server_url}")
-    print(f"policy_root_uri: {report.policy_root_uri}")
-    if report.baseline_eval:
-        print(
-            "baseline accuracy: "
-            f"{_fmt_percent(report.baseline_eval['accuracy'])} "
-            f"({report.baseline_eval['passed_count']}/{report.baseline_eval['case_count']})"
-        )
-        print(f"baseline average reward: {_fmt_score(report.baseline_eval['average_reward'])}")
-    if report.final_eval:
-        print(
-            "final accuracy: "
-            f"{_fmt_percent(report.final_eval['accuracy'])} "
-            f"({report.final_eval['passed_count']}/{report.final_eval['case_count']})"
-        )
-        print(f"final average reward: {_fmt_score(report.final_eval['average_reward'])}")
-    if report.accuracy_delta is not None:
-        print(f"accuracy delta: {_fmt_percentage_point(report.accuracy_delta)}")
-    if report.benchmark_service_url:
-        print(f"benchmark_service_url: {report.benchmark_service_url}")
-    if report.trace_id:
-        print(f"trace_id: {report.trace_id}")
-    print(f"report: {report.output_path}")
-
-
-def _fmt_score(value: Any) -> str:
-    if value is None:
-        return "n/a"
-    return f"{float(value):.6f}"
-
-
-def _fmt_percent(value: Any) -> str:
-    if value is None:
-        return "n/a"
-    return f"{float(value) * 100:.2f}%"
-
-
-def _fmt_percentage_point(value: Any) -> str:
-    if value is None:
-        return "n/a"
-    return f"{float(value) * 100:+.2f}pp"
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[3]

@@ -8,7 +8,8 @@ from typing import Any
 import pytest
 from test_fakes import fake_request_context
 
-from openviking.session.memory.dataclass import MemoryFile
+from openviking.session.memory.dataclass import MemoryFile, StoredLink
+from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.train import (
     ContentHashPolicySnapshotter,
     DryRunPolicyUpdater,
@@ -98,7 +99,7 @@ def _patch_gradient(
     after: str = "new content",
     base_version: int | None = 1,
     rationale: str = "r",
-    evidence_trajectory_uris: list[str] | None = None,
+    links: list[StoredLink] | None = None,
     confidence: float = 0.8,
     metadata: dict[str, Any] | None = None,
 ) -> PatchSemanticGradient:
@@ -111,7 +112,14 @@ def _patch_gradient(
         after_file=_memory_file(name=name, uri=uri, content=after, version=base_version),
         base_version=base_version,
         rationale=rationale,
-        evidence_trajectory_uris=evidence_trajectory_uris or ["traj://1"],
+        links=links or [
+            StoredLink(
+                from_uri=uri or "",
+                to_uri="viking://user/u/memories/trajectories/traj1.md",
+                link_type="derived_from",
+                weight=1.0,
+            )
+        ],
         confidence=confidence,
         metadata=metadata or {},
     )
@@ -138,7 +146,7 @@ def _plan_item_from_gradient(gradient: PatchSemanticGradient):
         after_content=gradient.after_file.plain_content(),
         base_version=gradient.base_version,
         confidence=gradient.confidence,
-        evidence_trajectory_uris=list(gradient.evidence_trajectory_uris),
+        links=list(gradient.links),
         metadata={"rationale": gradient.rationale},
     )
 
@@ -156,7 +164,14 @@ def _delete_plan(*, uri: str, before_content: str = "content") -> PolicyUpdatePl
                 after_content=None,
                 base_version=1,
                 confidence=0.8,
-                evidence_trajectory_uris=["traj://1"],
+                links=[
+                    StoredLink(
+                        from_uri=uri,
+                        to_uri="viking://user/u/memories/trajectories/traj1.md",
+                        link_type="derived_from",
+                        weight=1.0,
+                    )
+                ],
                 metadata={"rationale": "delete duplicate experience"},
             )
         ]
@@ -274,6 +289,61 @@ async def test_memory_file_policy_updater_writes_experience_files():
 
 
 @pytest.mark.asyncio
+async def test_memory_file_policy_updater_writes_v2_compatible_source_trajectory_links():
+    policy_set = _experience_set()
+    exp_uri = policy_set.policies[0].uri
+    traj_uri = "viking://user/u/memories/trajectories/booking_duplicate.md"
+    fs = FakeVikingFS(
+        {
+            traj_uri: MemoryFileUtils.write(
+                MemoryFile(
+                    uri=traj_uri,
+                    content="trajectory content",
+                    memory_type="trajectories",
+                    extra_fields={
+                        "memory_type": "trajectories",
+                        "trajectory_name": "booking_duplicate",
+                    },
+                )
+            )
+        }
+    )
+    gradient = _patch_gradient(
+        uri=exp_uri,
+        before="content",
+        after="new content",
+        links=[
+            StoredLink(
+                from_uri=exp_uri,
+                to_uri=traj_uri,
+                link_type="derived_from",
+                weight=1.0,
+            )
+        ],
+    )
+    plan = _plan_from_gradient(gradient)
+
+    result = await MemoryFilePolicyUpdater(viking_fs=fs).apply(plan, policy_set)
+
+    assert result.errors == []
+    exp_mf = MemoryFileUtils.read(fs.files[exp_uri], uri=exp_uri)
+    assert any(
+        link.get("from_uri") == exp_uri
+        and link.get("to_uri") == traj_uri
+        and link.get("link_type") == "derived_from"
+        for link in exp_mf.links
+    )
+
+    traj_mf = MemoryFileUtils.read(fs.files[traj_uri], uri=traj_uri)
+    assert any(
+        link.get("from_uri") == exp_uri
+        and link.get("to_uri") == traj_uri
+        and link.get("link_type") == "derived_from"
+        for link in traj_mf.backlinks
+    )
+
+
+@pytest.mark.asyncio
 async def test_memory_file_policy_updater_deletes_experience_files():
     policy_set = _experience_set()
     uri = policy_set.policies[0].uri
@@ -372,7 +442,9 @@ async def test_patch_merge_policy_optimizer_runs_patch_merge_extract_loop(monkey
     assert plan.items[0].target_experience_uri == policy_set.policies[0].uri
     assert plan.items[0].before_content == "content"
     assert plan.items[0].after_content == "merged content"
-    assert plan.items[0].evidence_trajectory_uris == ["traj://1"]
+    assert [link.to_uri for link in plan.items[0].links] == [
+        "viking://user/u/memories/trajectories/traj1.md"
+    ]
     assert captured["context_provider"].__class__.__name__ == "PatchMergeContextProvider"
     assert captured["context_provider"].get_tools() == []
     assert "```diff" in captured["prefetch_messages"][-1]["content"]
@@ -397,7 +469,14 @@ async def test_patch_merge_policy_optimizer_merges_all_patch_gradients_once(monk
             after="核对订单后只取消重复订单",
             base_version=None,
             rationale="r1",
-            evidence_trajectory_uris=["traj://1"],
+            links=[
+                StoredLink(
+                    from_uri=f"{root}/重复预订处理.md",
+                    to_uri="viking://user/u/memories/trajectories/traj1.md",
+                    link_type="derived_from",
+                    weight=1.0,
+                )
+            ],
             confidence=0.8,
         ),
         _patch_gradient(
@@ -407,7 +486,14 @@ async def test_patch_merge_policy_optimizer_merges_all_patch_gradients_once(monk
             after="识别有效订单并取消重复订单",
             base_version=None,
             rationale="r2",
-            evidence_trajectory_uris=["traj://2"],
+            links=[
+                StoredLink(
+                    from_uri=f"{root}/处理酒店重复预订.md",
+                    to_uri="viking://user/u/memories/trajectories/traj2.md",
+                    link_type="derived_from",
+                    weight=1.0,
+                )
+            ],
             confidence=0.9,
         ),
     ]
@@ -460,7 +546,11 @@ async def test_patch_merge_policy_optimizer_merges_all_patch_gradients_once(monk
     assert plan.metadata["patch_gradient_count"] == 2
     assert len(plan.items) == 1
     assert plan.items[0].target_experience_name == "重复预订处理"
-    assert plan.items[0].evidence_trajectory_uris == ["traj://1", "traj://2"]
+    assert [link.to_uri for link in plan.items[0].links] == [
+        "viking://user/u/memories/trajectories/traj1.md",
+        "viking://user/u/memories/trajectories/traj2.md",
+    ]
+    assert {link.from_uri for link in plan.items[0].links} == {f"{root}/重复预订处理.md"}
 
 
 @pytest.mark.asyncio

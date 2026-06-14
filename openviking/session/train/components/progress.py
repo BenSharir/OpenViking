@@ -1,33 +1,109 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Small terminal progress helper for train components."""
+"""Terminal progress helpers for train components."""
 
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
+from typing import Any
+
+try:  # pragma: no cover - exercised through integration/TTY usage
+    from rich.console import Console
+    from rich.progress import Progress, ProgressColumn, Task, TextColumn
+    from rich.table import Column
+    from rich.text import Text
+except Exception:  # pragma: no cover - fallback for minimal environments
+    Console = None
+    Progress = None
+    ProgressColumn = object  # type: ignore[assignment,misc]
+    Task = Any  # type: ignore[misc,assignment]
+    TextColumn = None
+    Column = None
+    Text = None
+
+
+class ThreeStateBarColumn(ProgressColumn):
+    """Render completed/running/pending work as a single rich progress bar."""
+
+    def __init__(self, bar_width: int = 42) -> None:
+        table_column = Column(ratio=1, no_wrap=True) if Column is not None else None
+        super().__init__(table_column=table_column)
+        self.bar_width = bar_width
+
+    def render(self, task: Task) -> Text:
+        bar_width = self.bar_width or 40
+        total = max(int(task.total or 0), 0)
+        completed = max(int(task.completed or 0), 0)
+        running = max(int(task.fields.get("running", 0) or 0), 0)
+
+        if total <= 0:
+            return Text("─" * bar_width, style="bar.back")
+
+        completed = min(completed, total)
+        running = min(running, total - completed)
+        completed_width = int(bar_width * completed / total)
+        running_width = int(bar_width * (completed + running) / total) - completed_width
+        pending_width = bar_width - completed_width - running_width
+
+        bar = Text()
+        if completed_width > 0:
+            bar.append("█" * completed_width, style="green")
+        if running_width > 0:
+            bar.append("▓" * running_width, style="yellow")
+        if pending_width > 0:
+            bar.append("░" * pending_width, style="dim")
+        return bar
 
 
 @dataclass(slots=True)
 class ProgressPrinter:
-    """Render a single-line P/R/C progress indicator to stdout."""
+    """Render a three-state progress indicator for train components.
+
+    The public API intentionally matches the previous lightweight printer so
+    callers only need ``render()``, ``start_one()``, ``complete_one()`` and
+    ``finish()``.  Rich rendering is used for interactive terminals; a compact
+    text fallback is kept for minimal environments.
+    """
 
     total: int
     label: str
     enabled: bool
+    description: str = ""
     pending: int = 0
     running: int = 0
     completed: int = 0
     _finished: bool = False
+    _use_rich: bool = field(init=False, default=False)
+    _progress: Any = field(init=False, default=None)
+    _task_id: Any = field(init=False, default=None)
+    _started: bool = field(init=False, default=False)
+    _description_printed: bool = field(init=False, default=False)
+    _started_at: float | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         if self.pending == 0 and self.running == 0 and self.completed == 0:
             self.pending = max(0, self.total)
+        self._use_rich = bool(
+            self.enabled
+            and self.total > 0
+            and Progress is not None
+            and Console is not None
+            and TextColumn is not None
+            and sys.stderr.isatty()
+        )
 
     def render(self) -> None:
         if not self.enabled or self.total <= 0:
             return
-        self._write()
+        self._mark_started()
+        self._print_description_once()
+        if self._use_rich:
+            self._ensure_rich_started()
+            self._update_rich()
+            return
+        self._write_text()
 
     def start_one(self) -> None:
         if not self.enabled or self.total <= 0 or self._finished:
@@ -55,9 +131,72 @@ class ProgressPrinter:
         if not self.enabled or self.total <= 0 or self._finished:
             return
         self._finished = True
-        self._write(newline=True)
+        if self._use_rich:
+            self._update_rich()
+            if self._progress is not None and self._started:
+                self._progress.stop()
+            return
+        self._write_text(newline=True)
 
-    def _write(self, *, newline: bool = False) -> None:
+    def _write(self) -> None:
+        self._mark_started()
+        self._print_description_once()
+        if self._use_rich:
+            self._ensure_rich_started()
+            self._update_rich()
+            return
+        self._write_text()
+
+    def _mark_started(self) -> None:
+        if self._started_at is None:
+            self._started_at = time.monotonic()
+
+    def _print_description_once(self) -> None:
+        if self._description_printed or not self.description:
+            return
+        self._description_printed = True
+        if self._use_rich:
+            line = Text()
+            line.append(format_label(self.label), style=label_style(self.label))
+            line.append(f" {self.description}")
+            Console(stderr=True, soft_wrap=False).print(line)
+            return
+        sys.stdout.write(f"[{self.label}] {self.description}\n")
+        sys.stdout.flush()
+
+    def _elapsed_seconds(self) -> float:
+        if self._started_at is None:
+            return 0.0
+        return max(0.0, time.monotonic() - self._started_at)
+
+    def _ensure_rich_started(self) -> None:
+        if self._progress is not None:
+            return
+        self._progress = Progress(
+            ThreeStateBarColumn(),
+            TextColumn(
+                "[progress.percentage]{task.percentage:>3.0f}% "
+                "({task.completed}/{task.total}, "
+                "[bold yellow]{task.fields[running]} running[/])"
+            ),
+            console=Console(stderr=True, soft_wrap=False),
+            transient=False,
+        )
+        self._task_id = self._progress.add_task(format_label(self.label), total=self.total, running=0)
+        self._progress.start()
+        self._started = True
+
+    def _update_rich(self) -> None:
+        if self._progress is None:
+            return
+        self._progress.update(
+            self._task_id,
+            total=self.total,
+            completed=self.completed,
+            running=self.running,
+        )
+
+    def _write_text(self, *, newline: bool = False) -> None:
         width = 24
         pending_width, running_width, completed_width = _state_widths(
             pending=self.pending,
@@ -71,7 +210,7 @@ class ProgressPrinter:
         suffix = "\n" if newline else ""
         sys.stdout.write(
             f"\r[{self.label}] [{bar}] {percent:6.2f}% "
-            f"({self.completed}/{self.total}){suffix}"
+            f"({self.completed}/{self.total}, {self.running} running){suffix}"
         )
         sys.stdout.flush()
 
@@ -111,3 +250,35 @@ def _state_widths(
         widths[idx] += 1
 
     return widths[0], widths[1], widths[2]
+
+
+def format_duration(seconds: float) -> str:
+    total_seconds = max(0, int(round(seconds)))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h{minutes}m{secs}s"
+    if minutes:
+        return f"{minutes}m{secs}s"
+    return f"{secs}s"
+
+
+def format_label(label: str) -> str:
+    return f"[{label.upper()}]"
+
+
+def label_style(label: str) -> str:
+    if label.endswith("_start"):
+        return "bold yellow"
+    if (
+        "final" in label
+        or label
+        in {
+            "train",
+            "train_rollout",
+            "test_rollout",
+            "baseline_test_rollout",
+        }
+    ):
+        return "bold green"
+    return "bold cyan"

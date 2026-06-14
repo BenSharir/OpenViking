@@ -1597,7 +1597,7 @@ def test_openviking_search_description_allows_follow_up_memory_queries():
 @pytest.mark.asyncio
 async def test_context_reminds_agent_to_search_current_memory_question(tmp_path):
     class _EmptyMemory:
-        async def get_viking_memory_context(self, **_kwargs):
+        async def get_viking_experience_context(self, **_kwargs):
             return ""
 
     context = ContextBuilder(workspace=tmp_path, sender_id="sender-1")
@@ -1608,7 +1608,6 @@ async def test_context_reminds_agent_to_search_current_memory_question(tmp_path)
         current_message="我会哪些语言",
         sender_id="sender-1",
         ov_tools_enable=True,
-        is_first_round=False,
     )
 
     assert "OpenViking Memory Retrieval" in user_info

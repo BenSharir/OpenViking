@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from openviking.message import Message
+from openviking.session.memory.dataclass import StoredLink
 
 PolicyStatus = Literal["draft", "staging", "production", "deprecated", "archived"]
 TrajectoryOutcome = Literal["success", "failure", "partial", "unfinished", "unknown"]
@@ -31,6 +32,8 @@ class Experience:
     status: PolicyStatus
     content: str
     metadata: dict[str, Any] = field(default_factory=dict)
+    links: list[dict[str, Any]] = field(default_factory=list)
+    backlinks: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -203,7 +206,7 @@ class PolicyPlanItem:
     after_content: str | None
     base_version: int | None = None
     confidence: float | None = None
-    evidence_trajectory_uris: list[str] = field(default_factory=list)
+    links: list[StoredLink] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
 

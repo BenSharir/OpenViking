@@ -771,6 +771,6 @@ async def test_experience_gradient_estimator_real_config_llm_generates_gradient(
     )
     assert gradient.target_experience_name
     assert gradient.after_file.plain_content().strip()
-    assert gradient.evidence_trajectory_uris
-    assert gradient.evidence_trajectory_uris[0] in fs.files
-    assert "/memories/trajectories/" in gradient.evidence_trajectory_uris[0]
+    assert gradient.links
+    assert gradient.links[0].to_uri in fs.files
+    assert "/memories/trajectories/" in gradient.links[0].to_uri

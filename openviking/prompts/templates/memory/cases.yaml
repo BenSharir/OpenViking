@@ -12,7 +12,6 @@ description: |
 directory: "viking://user/{{ user_space }}/memories/cases"
 filename_template: "{{ case_name }}.md"
 enabled: true
-operation_mode: "add_only"
 content_template: |
   # {{ case_name }}
 

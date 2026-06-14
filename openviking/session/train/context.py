@@ -5,7 +5,25 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+from openviking.session.train.components.report_builder import PipelineReportHook
+from openviking.session.train.components.reporter import ConsolePipelineReporter
+
+if TYPE_CHECKING:
+    from openviking.session.train.interfaces import CaseLoader
+    from openviking.session.train.components.reporter import PipelineLifecycleHook
+    from openviking.session.train.components.report_builder import PipelineReportBuilder
+
+
+@dataclass(slots=True)
+class PipelineHookDecision:
+    """Control decision returned by lifecycle hooks."""
+
+    stop_training: bool = False
+    reason: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+    report: dict[str, Any] | None = None
 
 
 @dataclass(slots=True)
@@ -24,6 +42,13 @@ class PipelineContext:
     apply_context: Any = None
     execution_metadata: dict[str, Any] = field(default_factory=dict)
     max_epochs: int = 1
+    eval_each_epoch_case_loader: CaseLoader | None = None
+    eval_trials: int = 1
+    trial_index_key: str = "trial"
+    report_builder: PipelineReportBuilder | None = None
+    lifecycle_hooks: list[PipelineLifecycleHook] = field(
+        default_factory=lambda: [PipelineReportHook(), ConsolePipelineReporter()]
+    )
 
 
 @dataclass(slots=True)

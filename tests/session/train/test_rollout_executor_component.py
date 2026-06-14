@@ -220,3 +220,167 @@ def test_tau2_final_answer_is_appended_for_native_evaluation():
 
     assert reward == 1.0
     assert evaluation.communicate_checks[0].met is True
+
+
+def test_tau2_configure_tools_removes_only_openviking_tools():
+    from benchmark.tau2.train.rollout_executor import _configure_tools
+
+    class FakeTools:
+        def __init__(self):
+            self.tool_names = [
+                "read_file",
+                "openviking_search",
+                "openviking_memory_commit",
+                "web_search",
+            ]
+            self.unregistered = []
+            self.registered = []
+
+        def unregister(self, name):
+            self.unregistered.append(name)
+            self.tool_names.remove(name)
+
+        def register(self, tool):
+            self.registered.append(tool.name)
+
+    class FakeAgent:
+        def __init__(self):
+            self.tools = FakeTools()
+
+    class FakeProvider:
+        def list_openai_tools(self):
+            return [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_user_details",
+                        "description": "get user",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ]
+
+        def call_tool(self, name, args):
+            return "ok"
+
+    agent = FakeAgent()
+
+    _configure_tools(agent, FakeProvider(), keep_default_tools=True)
+
+    assert agent.tools.unregistered == ["openviking_search", "openviking_memory_commit"]
+    assert agent.tools.tool_names == ["read_file", "web_search"]
+    assert agent.tools.registered == ["get_user_details"]
+
+
+def test_tau2_rollout_backend_factory_defaults_to_native():
+    from benchmark.tau2.train.rollout_executor import (
+        NativeTau2RolloutExecutor,
+        make_tau2_rollout_executor,
+        normalize_tau2_rollout_backend,
+    )
+
+    executor = make_tau2_rollout_executor(
+        options={"keep_default_tools": False, "max_iterations": 7},
+        concurrency=3,
+    )
+
+    assert normalize_tau2_rollout_backend(None) == "native"
+    assert isinstance(executor, NativeTau2RolloutExecutor)
+    assert executor.concurrency == 3
+    assert executor.memory_enabled is False
+    assert executor.max_steps == 7
+
+
+def test_tau2_native_rollout_resolves_non_empty_llms(monkeypatch):
+    from benchmark.tau2.train.rollout_executor_native import (
+        NativeTau2RolloutExecutor,
+        _resolve_llm_runtime_config,
+    )
+
+    monkeypatch.delenv("TAU2_AGENT_LLM", raising=False)
+    monkeypatch.delenv("TAU2_USER_LLM", raising=False)
+
+    agent_llm, agent_args, user_llm, user_args = _resolve_llm_runtime_config(
+        NativeTau2RolloutExecutor(
+            agent_llm_args={"temperature": 0.2},
+            user_llm_args={"top_p": 0.9},
+        )
+    )
+
+    assert agent_llm
+    assert user_llm
+    assert agent_args["temperature"] == 0.2
+    assert user_args["temperature"] == 0.0
+    assert user_args["top_p"] == 0.9
+
+
+def test_tau2_native_rollout_uses_env_llm_when_options_omit_model(monkeypatch):
+    from benchmark.tau2.train.rollout_executor_native import (
+        NativeTau2RolloutExecutor,
+        _resolve_llm_runtime_config,
+    )
+
+    monkeypatch.setenv("TAU2_AGENT_LLM", "openai/test-agent")
+    monkeypatch.setenv("TAU2_USER_LLM", "openai/test-user")
+
+    agent_llm, _agent_args, user_llm, _user_args = _resolve_llm_runtime_config(
+        NativeTau2RolloutExecutor()
+    )
+
+    assert agent_llm == "openai/test-agent"
+    assert user_llm == "openai/test-user"
+
+
+def test_tau2_rollout_backend_factory_selects_vikingbot(monkeypatch):
+    import benchmark.tau2.train.rollout_executor as module
+
+    created = {}
+
+    class FakeVikingBotExecutor:
+        def __init__(self, **kwargs):
+            created.update(kwargs)
+
+    monkeypatch.setattr(module, "VikingBotTau2RolloutExecutor", FakeVikingBotExecutor)
+
+    executor = module.make_tau2_rollout_executor(
+        backend="vikingbot",
+        options={"config_path": "/tmp/ov.conf", "max_iterations": 9},
+        concurrency=2,
+        rollout_language="zh",
+    )
+
+    assert isinstance(executor, FakeVikingBotExecutor)
+    assert created == {
+        "config_path": "/tmp/ov.conf",
+        "concurrency": 2,
+        "keep_default_tools": True,
+        "max_iterations": 9,
+        "rollout_language": "zh",
+    }
+
+
+def test_tau2_service_rollout_backend_option_overrides_default(monkeypatch):
+    import benchmark.tau2.train.service_app as service_app
+
+    calls = []
+
+    def fake_create_dataset_service_app(**kwargs):
+        calls.append(kwargs)
+        return kwargs
+
+    class FakeExecutor:
+        pass
+
+    def fake_make_tau2_rollout_executor(**kwargs):
+        calls.append({"factory": kwargs})
+        return FakeExecutor()
+
+    monkeypatch.setattr(service_app, "create_dataset_service_app", fake_create_dataset_service_app)
+    monkeypatch.setattr(service_app, "make_tau2_rollout_executor", fake_make_tau2_rollout_executor)
+
+    app = service_app.create_app(rollout_backend="native")
+    executor = app["make_rollout_executor"]({"rollout_backend": "vikingbot", "max_iterations": 5})
+
+    assert isinstance(executor, FakeExecutor)
+    assert calls[-1]["factory"]["backend"] == "vikingbot"
+    assert calls[-1]["factory"]["options"]["max_iterations"] == 5

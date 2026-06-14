@@ -12,7 +12,6 @@ from loguru import logger
 
 from vikingbot.agent.memory import MemoryStore
 from vikingbot.agent.skills import SkillsLoader
-from vikingbot.config.loader import load_config
 from vikingbot.config.schema import SessionKey
 from vikingbot.sandbox import SandboxManager
 from vikingbot.utils.helpers import ensure_non_empty_assistant_content
@@ -197,7 +196,7 @@ Skills with available="false" need dependencies installed first - you can try in
         memory_peer_ids: list[str] | None = None,
         memory_owner_user_ids: list[str] | None = None,
         ov_tools_enable: bool = True,
-        is_first_round: bool = True,
+        experience_recall_enable: bool | None = None,
     ) -> str:
         """
         Build the system prompt from bootstrap files, memory, and skills.
@@ -227,58 +226,36 @@ Skills with available="false" need dependencies installed first - you can try in
 
         workspace_id = self._get_workspace_id(session_key)
 
-        # Viking agent memory (only if ov tools are enabled)
-        if ov_tools_enable:
-            exp_first_round_only = load_config().ov_server.recall_exp_first_round_only
+        # Automatic recall is experience-only by default. It can be enabled
+        # independently from exposing OpenViking tools to the model, so benchmark
+        # rollouts can receive recalled experience without callable openviking_*
+        # tools. User memories are not auto-recalled here; if OV tools are
+        # enabled, the agent may explicitly call openviking_search when needed.
+        if experience_recall_enable is None:
+            experience_recall_enable = ov_tools_enable
+        self.latest_relevant_memories = None
+        if experience_recall_enable:
+            start = _time.time()
+            exp_memory = await self.memory.get_viking_experience_context(
+                query=current_message,
+                workspace_id=workspace_id,
+                openviking_connection=self._openviking_connection,
+            )
+            cost = round(_time.time() - start, 2)
+            logger.info(
+                f"[READ_EXP_AUTO]: cost {cost}s, "
+                f"exp={exp_memory[:50] if exp_memory else 'None'}"
+            )
+            if exp_memory:
+                self.latest_relevant_memories = exp_memory
+                parts.append(f"## Relevant Agent Experience\n{exp_memory}")
 
+        if ov_tools_enable:
             parts.append(
                 "## OpenViking Memory Retrieval\n"
                 "- For questions about the user's remembered facts, preferences, profile, or personal context, use openviking_search for the current question before saying there is no relevant record.\n"
                 "- A previous empty search result does not prove that a different follow-up question has no memory; search again when the requested fact changes."
             )
-
-            if exp_first_round_only:
-                # Alt mode: skip per-turn recall; inject experience memory once per session.
-                exp_workspace_id = workspace_id
-                self.latest_relevant_memories = None
-                if is_first_round:
-                    start = _time.time()
-                    exp_memory = await self.memory.get_viking_experience_context(
-                        query=current_message,
-                        workspace_id=exp_workspace_id,
-                        openviking_connection=self._openviking_connection,
-                    )
-                    cost = round(_time.time() - start, 2)
-                    logger.info(
-                        f"[READ_EXP_FIRST_ROUND]: cost {cost}s, "
-                        f"exp={exp_memory[:50] if exp_memory else 'None'}"
-                    )
-                    if exp_memory:
-                        self.latest_relevant_memories = exp_memory
-                        parts.append(f"## Relevant Agent Experience\n{exp_memory}")
-            else:
-                start = _time.time()
-                # Default recall runs under the configured/request OpenViking user.
-                # sender_id is passed separately as peer identity.
-                search_peer_ids = memory_peer_ids if memory_peer_ids else None
-                viking_memory = await self.memory.get_viking_memory_context(
-                    current_message=current_message,
-                    workspace_id=workspace_id,
-                    sender_id=sender_id,
-                    peer_ids=search_peer_ids,
-                    user_ids=memory_owner_user_ids if memory_owner_user_ids else None,
-                    openviking_connection=self._openviking_connection,
-                )
-                logger.info(f"viking_memory={viking_memory}")
-                cost = round(_time.time() - start, 2)
-                logger.info(
-                    f"[READ_USER_MEMORY]: cost {cost}s, memory={viking_memory[:50] if viking_memory else 'None'}"
-                )
-                if viking_memory:
-                    self.latest_relevant_memories = viking_memory
-                    parts.append(f"## openviking_search(query=[user_query])\n{viking_memory}")
-                else:
-                    self.latest_relevant_memories = None
 
         parts.append(
             "Reply in the same language as the user's query, ignoring the language of the reference materials. User's query:"
@@ -351,6 +328,7 @@ IMPORTANT:
         profile_user_list: list[str] | None = None,
         memory_peer_ids: list[str] | None = None,
         memory_owner_user_ids: list[str] | None = None,
+        experience_recall_enable: bool | None = None,
     ) -> list[dict[str, Any]]:
         """
         Build the complete message list for an LLM call.
@@ -364,6 +342,8 @@ IMPORTANT:
             profile_user_list: Deprecated list of additional peer IDs to fetch profiles for.
             memory_peer_ids: Optional list of peer IDs to fetch memory for.
             memory_owner_user_ids: Deprecated legacy owner-user IDs used for root-key fanout.
+            experience_recall_enable: Whether automatic experience recall may run independently
+                from exposing OpenViking tools. Defaults to ov_tools_enable.
 
         Returns:
             List of messages including system prompt.
@@ -393,7 +373,7 @@ IMPORTANT:
             memory_peer_ids,
             memory_owner_user_ids,
             ov_tools_enable=ov_tools_enable,
-            is_first_round=not history,
+            experience_recall_enable=experience_recall_enable,
         )
         messages.append({"role": "user", "content": user_info})
 

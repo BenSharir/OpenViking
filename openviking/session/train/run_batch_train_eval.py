@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI for tau2 batch policy train/eval."""
+"""CLI for remote benchmark batch policy train/eval."""
 
 from __future__ import annotations
 
@@ -15,8 +15,8 @@ if str(REPO_ROOT) not in sys.path:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run remote benchmark batch policy train/eval")
-    parser.add_argument("--dataset", default="tau2", help="Remote benchmark dataset. Default: tau2")
-    parser.add_argument("--domain", default="airline", help="Benchmark domain. Default: airline")
+    parser.add_argument("--dataset", required=True, help="Remote benchmark dataset")
+    parser.add_argument("--domain", required=True, help="Benchmark domain")
     parser.add_argument("--epochs", type=int, default=1, help="Training epochs (default: 1)")
     parser.add_argument(
         "--batch-size",
@@ -27,14 +27,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--concurrency",
         type=int,
-        default=20,
-        help="Concurrent rollout executions for train and eval (default: 20)",
+        default=150,
+        help="Concurrent rollout executions for train and eval (default: 150)",
     )
     parser.add_argument(
         "--commit-concurrency",
         type=int,
-        default=20,
-        help="Concurrent OpenViking session.commit submissions during train (default: 20)",
+        default=100,
+        help="Concurrent OpenViking session.commit submissions during train (default: 100)",
     )
     parser.add_argument("--config", default=None, help="ov.conf path (optional)")
     parser.add_argument("--server-url", default=None, help="OpenViking server URL. Defaults to ov.conf/ovcli.conf")
@@ -51,7 +51,13 @@ def parse_args() -> argparse.Namespace:
         "--max-iterations",
         type=int,
         default=30,
-        help="VikingBot max tool iterations per rollout (default: 30)",
+        help="Max steps/iterations per rollout (default: 30)",
+    )
+    parser.add_argument(
+        "--rollout-backend",
+        choices=["native", "vikingbot"],
+        default="native",
+        help="Benchmark rollout implementation backend (default: native).",
     )
     parser.add_argument(
         "--train-limit",
@@ -70,15 +76,29 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Run pre-training baseline eval. Disabled by default.",
     )
+    parser.add_argument(
+        "--eval-each-epoch",
+        action="store_true",
+        help="Run held-out eval after every training epoch. Disabled by default.",
+    )
+    parser.add_argument(
+        "--trials",
+        type=int,
+        default=8,
+        help="Run each eval split N times and aggregate (default: 8).",
+    )
     return parser.parse_args()
 
 
 async def main_async() -> int:
     args = parse_args()
-    from benchmark.tau2.train.runner import Tau2BatchRunConfig, run_tau2_batch_train_eval
+    from openviking.session.train.batch_runner import (
+        BatchTrainEvalConfig,
+        run_batch_train_eval,
+    )
 
-    report = await run_tau2_batch_train_eval(
-        Tau2BatchRunConfig(
+    report = await run_batch_train_eval(
+        BatchTrainEvalConfig(
             dataset=args.dataset,
             domain=args.domain,
             epochs=args.epochs,
@@ -93,10 +113,13 @@ async def main_async() -> int:
             output_path=args.output,
             keep_default_tools=True,
             max_iterations=args.max_iterations,
+            rollout_backend=args.rollout_backend,
             train_limit=args.train_limit,
             eval_limit=args.eval_limit,
             benchmark_service_url=args.benchmark_service_url,
             baseline_eval_enabled=args.baseline_eval,
+            eval_each_epoch=args.eval_each_epoch,
+            trials=args.trials,
         )
     )
     return 1 if any(epoch.get("errors") for epoch in report.train_epochs) else 0

@@ -4,10 +4,17 @@
 
 from __future__ import annotations
 
+import inspect
+import time
 from typing import Any
 
+from openviking.session.train.components.case_loader import make_trial_case_loader
 from openviking.session.train.components.policy_trainer import BatchPolicyTrainer
-from openviking.session.train.context import ExecutionContext, PipelineContext
+from openviking.session.train.context import (
+    ExecutionContext,
+    PipelineContext,
+    PipelineHookDecision,
+)
 from openviking.session.train.domain import (
     ExperienceSet,
     PipelineEpochResult,
@@ -18,7 +25,6 @@ from openviking.session.train.domain import (
     RolloutAnalysis,
     RolloutTrainingResult,
 )
-from openviking.session.train.engine import PolicyTrainingEngine
 from openviking.session.train.interfaces import (
     CaseLoader,
     GradientEstimator,
@@ -59,16 +65,6 @@ class OfflinePolicyOptimizationPipeline:
     ) -> None:
         self.snapshotter = snapshotter
         self.rollout_executor = rollout_executor
-        self.rollout_analyzer = rollout_analyzer
-        self.gradient_estimator = gradient_estimator
-        self.policy_optimizer = policy_optimizer
-        self.policy_updater = policy_updater
-        self._training_engine = PolicyTrainingEngine(
-            rollout_analyzer=rollout_analyzer,
-            gradient_estimator=gradient_estimator,
-            policy_optimizer=policy_optimizer,
-            policy_updater=policy_updater,
-        )
         self.policy_trainer = policy_trainer or BatchPolicyTrainer(
             rollout_analyzer=rollout_analyzer,
             gradient_estimator=gradient_estimator,
@@ -87,8 +83,12 @@ class OfflinePolicyOptimizationPipeline:
         max_epochs = max(1, int(ctx.max_epochs or 1))
         current_policy_set = policy_set
         epoch_results: list[PipelineEpochResult] = []
+        evaluation_passes: list[PipelineEvaluationResult] = []
+        train_epoch_reports: list[dict[str, Any]] = []
+        stop_decision: PipelineHookDecision | None = None
 
         for epoch in range(max_epochs):
+            await _emit_epoch_start(ctx, epoch)
             epoch_result = await self._run_training_epoch(
                 epoch=epoch,
                 case_loader=case_loader,
@@ -97,6 +97,25 @@ class OfflinePolicyOptimizationPipeline:
             )
             epoch_results.append(epoch_result)
             current_policy_set = epoch_result.apply_result.updated_policy_set
+            hook_decision = await _emit_epoch_end(
+                epoch_result=epoch_result,
+                policy_set=current_policy_set,
+                ctx=ctx,
+            )
+            train_report = hook_decision.report if hook_decision is not None else None
+            if train_report is not None:
+                train_epoch_reports.append(train_report)
+            await _emit_train_report(ctx, train_report)
+            if hook_decision is not None and hook_decision.stop_training:
+                stop_decision = hook_decision
+                break
+            epoch_eval = await self._run_epoch_evaluation_pass(
+                epoch=epoch,
+                policy_set=current_policy_set,
+                ctx=ctx,
+            )
+            if epoch_eval is not None:
+                evaluation_passes.append(epoch_eval)
 
         all_analyses = [
             analysis for epoch in epoch_results for analysis in epoch.analyses
@@ -117,7 +136,15 @@ class OfflinePolicyOptimizationPipeline:
         metadata: dict[str, Any] = {
             "policy_set_root_uri": current_policy_set.root_uri,
             "max_epochs": max_epochs,
+            "completed_epochs": len(epoch_results),
+            "evaluation_pass_count": len(evaluation_passes),
+            "train_reports": train_epoch_reports,
+            "stopped_early": stop_decision is not None,
         }
+        if stop_decision is not None:
+            metadata["stop_reason"] = stop_decision.reason
+            if stop_decision.metadata:
+                metadata["stop_metadata"] = dict(stop_decision.metadata)
         if first_score is not None:
             metadata["first_score"] = first_score
         if final_score is not None:
@@ -131,7 +158,7 @@ class OfflinePolicyOptimizationPipeline:
             plan=last_plan,
             apply_result=last_apply_result,
             epochs=epoch_results,
-            evaluation_passes=[],
+            evaluation_passes=evaluation_passes,
             metadata=metadata,
         )
 
@@ -143,12 +170,25 @@ class OfflinePolicyOptimizationPipeline:
         context: PipelineContext | Any,
     ) -> PipelineEvaluationResult:
         ctx = context if isinstance(context, PipelineContext) else PipelineContext()
-        return await self._run_evaluation_pass(
+        eval_case_loader = _eval_case_loader(case_loader, ctx)
+        result = await self._run_evaluation_pass(
             epoch=int(ctx.execution_metadata.get("epoch", 0) or 0),
-            case_loader=case_loader,
+            case_loader=eval_case_loader,
             policy_set=policy_set,
             ctx=ctx,
         )
+        eval_report = await _emit_eval_end(
+            evaluation_result=result,
+            policy_set=policy_set,
+            ctx=ctx,
+        )
+        if eval_report is None:
+            raise RuntimeError(
+                "pipeline eval requires a lifecycle hook to provide an evaluation report"
+            )
+        result.metadata["report"] = eval_report
+        await _emit_eval_report(ctx, eval_report)
+        return result
 
     @tracer("train.pipeline.train_from_rollouts", ignore_result=True, ignore_args=True)
     async def train_from_rollouts(
@@ -195,8 +235,11 @@ class OfflinePolicyOptimizationPipeline:
         last_apply_result: PolicyApplyResult | None = None
         current_policy_set = policy_set
         snapshot_ids: list[str] = []
+        rollout_report: dict[str, Any] | None = None
 
+        epoch_started_at = time.monotonic()
         async for cases in case_loader.batches(ctx.case_load_context):
+            rollout_started_at = time.monotonic()
             rollouts, snapshot_id = await self._rollout_batch(
                 cases=cases,
                 policy_set=current_policy_set,
@@ -204,7 +247,17 @@ class OfflinePolicyOptimizationPipeline:
                 epoch=epoch,
                 training=True,
             )
+            rollout_cost_seconds = time.monotonic() - rollout_started_at
             snapshot_ids.append(snapshot_id)
+            hook_rollout_report = await _emit_train_rollout_end(
+                epoch=epoch,
+                rollouts=rollouts,
+                snapshot_id=snapshot_id,
+                policy_set=current_policy_set,
+                ctx=ctx,
+            )
+            rollout_report = _with_cost(hook_rollout_report, rollout_cost_seconds)
+            await _emit_train_rollout_report(ctx, rollout_report)
             training_result = await self.policy_trainer.train_rollouts(
                 rollouts,
                 current_policy_set,
@@ -217,6 +270,7 @@ class OfflinePolicyOptimizationPipeline:
             all_gradients.extend(gradients)
             current_policy_set = last_apply_result.updated_policy_set
 
+        epoch_cost_seconds = time.monotonic() - epoch_started_at
         if last_plan is None or last_apply_result is None:
             last_plan = PolicyUpdatePlan(metadata={"empty": True, "epoch": epoch})
             last_apply_result = PolicyApplyResult(updated_policy_set=current_policy_set)
@@ -232,6 +286,8 @@ class OfflinePolicyOptimizationPipeline:
                 "score": _average_score(all_analyses),
                 "analysis_count": len(all_analyses),
                 "gradient_count": len(all_gradients),
+                "train_rollout_report": rollout_report,
+                "cost_seconds": epoch_cost_seconds,
             },
         )
 
@@ -246,6 +302,7 @@ class OfflinePolicyOptimizationPipeline:
         all_analyses: list[RolloutAnalysis] = []
         snapshot_ids: list[str] = []
 
+        started_at = time.monotonic()
         async for cases in case_loader.batches(ctx.case_load_context):
             rollouts, snapshot_id = await self._rollout_batch(
                 cases=cases,
@@ -256,17 +313,50 @@ class OfflinePolicyOptimizationPipeline:
             )
             snapshot_ids.append(snapshot_id)
             all_analyses.extend(_analyses_from_rollout_evaluations(rollouts))
+        cost_seconds = time.monotonic() - started_at
 
         return PipelineEvaluationResult(
             epoch=epoch,
             analyses=all_analyses,
             policy_snapshot_ids=snapshot_ids,
             metadata={
+                **dict(ctx.execution_metadata),
                 "score": _average_score(all_analyses),
                 "analysis_count": len(all_analyses),
                 "evaluation_only": True,
+                "cost_seconds": cost_seconds,
             },
         )
+
+    async def _run_epoch_evaluation_pass(
+        self,
+        *,
+        epoch: int,
+        policy_set: ExperienceSet,
+        ctx: PipelineContext,
+    ) -> PipelineEvaluationResult | None:
+        if ctx.eval_each_epoch_case_loader is None:
+            return None
+        eval_ctx = _epoch_eval_context(ctx, epoch=epoch)
+        eval_case_loader = _eval_case_loader(ctx.eval_each_epoch_case_loader, eval_ctx)
+        result = await self._run_evaluation_pass(
+            epoch=epoch,
+            case_loader=eval_case_loader,
+            policy_set=policy_set,
+            ctx=eval_ctx,
+        )
+        eval_report = await _emit_eval_end(
+            evaluation_result=result,
+            policy_set=policy_set,
+            ctx=eval_ctx,
+        )
+        if eval_report is None:
+            raise RuntimeError(
+                "pipeline eval requires a lifecycle hook to provide an evaluation report"
+            )
+        result.metadata["report"] = eval_report
+        await _emit_eval_report(eval_ctx, eval_report)
+        return result
 
     async def _rollout_batch(
         self,
@@ -281,11 +371,14 @@ class OfflinePolicyOptimizationPipeline:
             policy_set,
             ctx.snapshot_context,
         )
+        stage = ctx.execution_metadata.get("rollout_stage")
+        if not stage:
+            stage = _rollout_stage(epoch=epoch, training=training)
         execution_metadata = {
             **dict(ctx.execution_metadata),
             "epoch": epoch,
             "training": training,
-            "stage": _rollout_stage(epoch=epoch, training=training),
+            "stage": stage,
         }
         execution_context = ExecutionContext(
             policy_snapshot_id=snapshot_id,
@@ -299,12 +392,217 @@ class OfflinePolicyOptimizationPipeline:
         return rollouts, snapshot_id
 
 
+async def _emit_train_rollout_end(
+    *,
+    epoch: int,
+    rollouts: list[Any],
+    snapshot_id: str,
+    policy_set: ExperienceSet,
+    ctx: PipelineContext,
+) -> dict[str, Any] | None:
+    hook_report: dict[str, Any] | None = None
+    for hook in ctx.lifecycle_hooks:
+        result = await _call_hook(
+            hook.on_train_rollout_end,
+            epoch=epoch,
+            rollouts=rollouts,
+            snapshot_id=snapshot_id,
+            policy_set=policy_set,
+            context=ctx,
+        )
+        hook_report = _merge_report_hook_result(
+            hook_report,
+            result,
+            hook_name="on_train_rollout_end",
+        )
+    return hook_report
+
+
+def _merge_report_hook_result(
+    current: dict[str, Any] | None,
+    result: Any,
+    *,
+    hook_name: str,
+) -> dict[str, Any] | None:
+    if result is None:
+        return current
+    if not isinstance(result, dict):
+        raise TypeError(
+            f"{hook_name} must return dict or None, got {type(result).__name__}"
+        )
+    return result
+
+
+async def _call_hook(method: Any, **kwargs: Any) -> Any:
+    result = method(**kwargs)
+    if inspect.isawaitable(result):
+        return await result
+    return result
+
+
+async def _call_event_hook(method: Any, **kwargs: Any) -> None:
+    await _call_hook(method, **kwargs)
+
+
+async def _emit_epoch_end(
+    *,
+    epoch_result: PipelineEpochResult,
+    policy_set: ExperienceSet,
+    ctx: PipelineContext,
+) -> PipelineHookDecision | None:
+    hook_decision: PipelineHookDecision | None = None
+    for hook in ctx.lifecycle_hooks:
+        result = await _call_hook(
+            hook.on_epoch_end,
+            epoch_result=epoch_result,
+            policy_set=policy_set,
+            context=ctx,
+        )
+        if result is None:
+            continue
+        if not isinstance(result, PipelineHookDecision):
+            raise TypeError(
+                "on_epoch_end must return PipelineHookDecision or None, "
+                f"got {type(result).__name__}"
+            )
+        hook_decision = _merge_hook_decision(hook_decision, result)
+    return hook_decision
+
+
+async def _emit_eval_end(
+    *,
+    evaluation_result: PipelineEvaluationResult,
+    policy_set: ExperienceSet,
+    ctx: PipelineContext,
+) -> dict[str, Any] | None:
+    hook_report: dict[str, Any] | None = None
+    for hook in ctx.lifecycle_hooks:
+        result = await _call_hook(
+            hook.on_eval_end,
+            evaluation_result=evaluation_result,
+            policy_set=policy_set,
+            context=ctx,
+        )
+        hook_report = _merge_report_hook_result(
+            hook_report,
+            result,
+            hook_name="on_eval_end",
+        )
+    return hook_report
+
+
+def _epoch_eval_context(ctx: PipelineContext, *, epoch: int) -> PipelineContext:
+    execution_metadata = {
+        **dict(ctx.execution_metadata),
+        "epoch": epoch,
+        "training": False,
+    }
+    execution_metadata.pop("rollout_stage", None)
+    return PipelineContext(
+        case_load_context=ctx.case_load_context,
+        snapshot_context=ctx.snapshot_context,
+        analysis_context=ctx.analysis_context,
+        gradient_context=ctx.gradient_context,
+        optimization_context=ctx.optimization_context,
+        apply_context=ctx.apply_context,
+        execution_metadata=execution_metadata,
+        max_epochs=1,
+        eval_trials=ctx.eval_trials,
+        trial_index_key=ctx.trial_index_key,
+        report_builder=ctx.report_builder,
+        lifecycle_hooks=list(ctx.lifecycle_hooks),
+    )
+
+
+def _eval_case_loader(case_loader: CaseLoader, ctx: PipelineContext) -> CaseLoader:
+    eval_trials = int(ctx.eval_trials or 1)
+    if eval_trials <= 1:
+        return case_loader
+    return make_trial_case_loader(
+        case_loader,
+        eval_trials,
+        trial_input_key=ctx.trial_index_key,
+    )
+
+
+def _merge_hook_decision(
+    current: PipelineHookDecision | None,
+    incoming: PipelineHookDecision,
+) -> PipelineHookDecision:
+    if current is None:
+        return incoming
+    return PipelineHookDecision(
+        stop_training=current.stop_training or incoming.stop_training,
+        reason=incoming.reason or current.reason,
+        metadata={**current.metadata, **incoming.metadata},
+        report=incoming.report if incoming.report is not None else current.report,
+    )
+
+
+async def _emit_epoch_start(ctx: PipelineContext, epoch: int) -> None:
+    for hook in ctx.lifecycle_hooks:
+        await _call_event_hook(hook.on_epoch_start, epoch=epoch, context=ctx)
+
+
+async def _emit_train_rollout_report(
+    ctx: PipelineContext,
+    report: dict[str, Any] | None,
+) -> None:
+    if report is None:
+        return
+    for hook in ctx.lifecycle_hooks:
+        await _call_event_hook(
+            hook.on_train_rollout_report,
+            report=report,
+            context=ctx,
+        )
+
+
+async def _emit_train_report(
+    ctx: PipelineContext,
+    report: dict[str, Any] | None,
+) -> None:
+    if report is None:
+        return
+    for hook in ctx.lifecycle_hooks:
+        await _call_event_hook(hook.on_train_report, report=report, context=ctx)
+
+
+async def _emit_eval_report(ctx: PipelineContext, report: dict[str, Any] | None) -> None:
+    if report is None:
+        return
+    label = str(
+        report.get("label")
+        or ctx.execution_metadata.get("report_label")
+        or ctx.execution_metadata.get("rollout_stage")
+        or _rollout_stage(
+            epoch=int(ctx.execution_metadata.get("epoch", 0) or 0),
+            training=False,
+        ).split(maxsplit=1)[0]
+    )
+    for hook in ctx.lifecycle_hooks:
+        await _call_event_hook(
+            hook.on_eval_report,
+            label=label,
+            report=report,
+            context=ctx,
+        )
+
+
+def _with_cost(report: dict[str, Any] | None, cost_seconds: float) -> dict[str, Any] | None:
+    if report is None:
+        return None
+    updated = dict(report)
+    updated["cost_seconds"] = max(0.0, float(cost_seconds))
+    return updated
+
+
 def _rollout_stage(*, epoch: int, training: bool) -> str:
     if training:
-        return f"train-rollout epoch={epoch}"
+        return f"train_rollout epoch={epoch}"
     if epoch < 0:
-        return "baseline-rollout"
-    return "final-rollout"
+        return "baseline_test_rollout"
+    return f"test_rollout epoch={epoch}"
 
 
 def _average_score(analyses: list[RolloutAnalysis]) -> float | None:

@@ -65,6 +65,8 @@ class ExperienceSetLoader:
                     status=status,
                     content=mf.plain_content(),
                     metadata=metadata,
+                    links=list(mf.links or []),
+                    backlinks=list(mf.backlinks or []),
                 )
             )
 

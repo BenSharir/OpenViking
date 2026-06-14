@@ -7,7 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from openviking.session.memory.dataclass import MemoryFile
+from openviking.session.memory.dataclass import MemoryFile, StoredLink
 
 
 @dataclass(slots=True)
@@ -23,7 +23,7 @@ class PatchSemanticGradient:
     after_file: MemoryFile
     base_version: int | None
     rationale: str
-    evidence_trajectory_uris: list[str]
+    links: list[StoredLink]
     confidence: float
     metadata: dict[str, Any] = field(default_factory=dict)
 

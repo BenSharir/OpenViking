@@ -6,9 +6,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
-from openviking.session.memory.dataclass import MemoryFile
+from openviking.session.memory.dataclass import MemoryFile, StoredLink
+from openviking.session.memory.memory_updater import write_stored_links
+from openviking.session.memory.merge_op.link_merge import merge_links
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.train.domain import (
     Experience,
@@ -122,10 +125,17 @@ class MemoryFilePolicyUpdater:
                     f"planned policy not found after simulation: {item.target_experience_name}"
                 )
                 continue
+            links = _experience_source_trajectory_links(
+                exp_uri=uri,
+                existing=current,
+                links=item.links,
+            )
+            updated.links = links
             raw = MemoryFileUtils.write(
                 MemoryFile(
                     uri=uri,
                     content=updated.content,
+                    links=links,
                     memory_type="experiences",
                     extra_fields={
                         **dict(updated.metadata),
@@ -138,6 +148,12 @@ class MemoryFilePolicyUpdater:
             )
             try:
                 await viking_fs.write_file(uri, raw, ctx=context)
+                await _write_source_trajectory_backlinks(
+                    exp_uri=uri,
+                    links=item.links,
+                    viking_fs=viking_fs,
+                    ctx=context,
+                )
                 written_uris.append(uri)
             except Exception as exc:  # pragma: no cover - defensive component boundary
                 errors.append(f"failed to write {uri}: {exc}")
@@ -199,11 +215,6 @@ def _apply_items_to_snapshot(
         metadata.update(item.metadata.get("patch_metadata", {}))
         metadata.setdefault("memory_type", "experiences")
         metadata["experience_name"] = item.target_experience_name
-        metadata["source_gradient"] = {
-            "confidence": item.confidence,
-            "evidence_trajectory_uris": list(item.evidence_trajectory_uris),
-            "rationale": item.metadata.get("rationale"),
-        }
         version = (existing.version + 1) if existing is not None else 1
         updated = Experience(
             name=item.target_experience_name,
@@ -212,6 +223,8 @@ def _apply_items_to_snapshot(
             status=(existing.status if existing is not None else "draft"),
             content=item.after_content,
             metadata=metadata,
+            links=list(existing.links or []) if existing is not None else [],
+            backlinks=list(existing.backlinks or []) if existing is not None else [],
         )
         if existing is None:
             result.append(updated)
@@ -247,6 +260,62 @@ def _target_uri(item: PolicyPlanItem, root_uri: str) -> str:
     if item.target_experience_uri:
         return item.target_experience_uri
     return f"{root_uri.rstrip('/')}/{_safe_experience_filename(item.target_experience_name)}.md"
+
+
+def _experience_source_trajectory_links(
+    *,
+    exp_uri: str,
+    existing: Experience | None,
+    links: list[StoredLink],
+) -> list[dict[str, Any]]:
+    """Return v2-compatible exp→traj derived_from links for an experience write."""
+
+    existing_links = list(existing.links or []) if existing else []
+    source_links = _source_trajectory_links(exp_uri=exp_uri, links=links)
+    if not source_links:
+        return existing_links
+    return merge_links(existing_links, [link.model_dump() for link in source_links])
+
+
+async def _write_source_trajectory_backlinks(
+    *,
+    exp_uri: str,
+    links: list[StoredLink],
+    viking_fs: Any,
+    ctx: Any,
+) -> None:
+    """Write the trajectory-side backlink for v2-compatible exp→traj links."""
+
+    source_links = _source_trajectory_links(exp_uri=exp_uri, links=links)
+    if not source_links:
+        return
+    await write_stored_links(source_links, ctx, viking_fs, skip_uris={exp_uri})
+
+
+def _source_trajectory_links(
+    *,
+    exp_uri: str,
+    links: list[StoredLink],
+) -> list[StoredLink]:
+    result: list[StoredLink] = []
+    seen: set[tuple[str, str | None]] = set()
+    now = datetime.now(timezone.utc).isoformat()
+    for link in links or []:
+        if (
+            link.link_type != "derived_from"
+            or not link.to_uri
+            or "/memories/trajectories/" not in link.to_uri
+        ):
+            continue
+        key = (link.to_uri, link.match_text)
+        if key in seen:
+            continue
+        seen.add(key)
+        update = {"from_uri": exp_uri}
+        if not link.created_at:
+            update["created_at"] = now
+        result.append(link.model_copy(update=update))
+    return result
 
 
 def _safe_experience_filename(name: str) -> str:

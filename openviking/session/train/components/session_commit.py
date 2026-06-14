@@ -25,6 +25,7 @@ from openviking.session.train.domain import (
 from openviking_cli.client.http import AsyncHTTPClient
 
 _TRAINING_COMMIT_MEMORY_TYPES = ("cases", "trajectories", "experiences")
+_SESSION_BATCH_ADD_MESSAGE_LIMIT = 100
 
 
 @dataclass(slots=True)
@@ -35,7 +36,7 @@ class SessionCommitPolicyTrainer:
     run_id: str = ""
     keep_recent_count: int = 0
     poll_interval_seconds: float = 2.0
-    timeout_seconds: float = 600.0
+    timeout_seconds: float | None = None
     commit_concurrency: int = 20
     show_progress: bool = False
     progress_label: str = "session-commit"
@@ -45,7 +46,7 @@ class SessionCommitPolicyTrainer:
             self.run_id = _new_run_id()
         if self.poll_interval_seconds <= 0:
             raise ValueError("poll_interval_seconds must be > 0")
-        if self.timeout_seconds <= 0:
+        if self.timeout_seconds is not None and self.timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be > 0")
         if self.commit_concurrency <= 0:
             raise ValueError("commit_concurrency must be > 0")
@@ -66,8 +67,12 @@ class SessionCommitPolicyTrainer:
             )
         progress = ProgressPrinter(
             total=len(rollout_list),
-            label=self.progress_label,
+            label="train_start",
             enabled=self.show_progress,
+            description=(
+                f"Processing {len(rollout_list)} rollouts, "
+                f"concurrency={self.commit_concurrency}"
+            ),
         )
         progress.render()
 
@@ -120,52 +125,94 @@ class SessionCommitPolicyTrainer:
         index: int,
     ) -> dict[str, Any]:
         session_id = _session_id_for_rollout(rollout, run_id=self.run_id)
+        stage = "prepare_messages"
         try:
             messages = (
                 [_case_spec_message_to_request(rollout)]
                 + [_message_to_request(message) for message in rollout.messages]
                 + [_evaluation_message_to_request(rollout)]
             )
+            stage = "create_session"
             await self.client.create_session(
                 session_id=session_id,
                 memory_policy=_training_commit_memory_policy(),
             )
-            await self.client.batch_add_messages(session_id, messages)
+            stage = "batch_add_messages"
+            await self._batch_add_messages(session_id, messages)
+            stage = "commit_session"
             commit_result = await self.client.commit_session(
                 session_id,
+                telemetry=True,
                 keep_recent_count=self.keep_recent_count,
             )
             task_id = str(commit_result.get("task_id") or "")
+            archive_uri = str(commit_result.get("archive_uri") or "")
+            trace_id = _commit_trace_id(commit_result)
+            telemetry_id = _commit_telemetry_id(commit_result)
+            stage = "wait_task"
             task = await self._wait_task(task_id) if task_id else None
+            task_error = _task_error(task)
+            if task_error:
+                print(
+                    f"[session_commit] failed stage={stage} session_id={session_id} "
+                    f"task_id={task_id} trace_id={trace_id or '<none>'} "
+                    f"error={task_error}",
+                    flush=True,
+                )
             return {
                 "index": index,
                 "session_id": session_id,
+                "stage": stage,
                 "task_id": task_id,
-                "trace_id": commit_result.get("trace_id"),
+                "archive_uri": archive_uri,
+                "trace_id": trace_id,
+                "telemetry_id": telemetry_id,
                 "task_status": task.get("status") if isinstance(task, dict) else None,
                 "score": _rollout_score(rollout),
-                "error": _task_error(task),
+                "error": task_error,
             }
         except Exception as exc:
+            print(
+                f"[session_commit] failed stage={stage} session_id={session_id} "
+                f"task_id=<none> trace_id=<none> error={exc}",
+                flush=True,
+            )
             return {
                 "index": index,
                 "session_id": session_id,
+                "stage": stage,
                 "task_id": "",
+                "archive_uri": "",
                 "trace_id": None,
+                "telemetry_id": None,
                 "task_status": "failed",
                 "score": _rollout_score(rollout),
                 "error": str(exc),
             }
 
+    async def _batch_add_messages(self, session_id: str, messages: list[dict[str, Any]]) -> None:
+        for chunk in _chunks(messages, _SESSION_BATCH_ADD_MESSAGE_LIMIT):
+            await self.client.batch_add_messages(session_id, chunk)
+
     async def _wait_task(self, task_id: str) -> dict[str, Any]:
-        deadline = asyncio.get_running_loop().time() + self.timeout_seconds
+        deadline = (
+            asyncio.get_running_loop().time() + self.timeout_seconds
+            if self.timeout_seconds is not None
+            else None
+        )
         while True:
             task = await self.client.get_task(task_id)
             if task and task.get("status") in {"completed", "failed"}:
                 return task
-            if asyncio.get_running_loop().time() >= deadline:
+            if deadline is not None and asyncio.get_running_loop().time() >= deadline:
                 return {"task_id": task_id, "status": "timeout", "error": "commit task timeout"}
             await asyncio.sleep(self.poll_interval_seconds)
+
+
+def _chunks(items: list[dict[str, Any]], size: int) -> list[list[dict[str, Any]]]:
+    if size <= 0:
+        raise ValueError("chunk size must be > 0")
+    return [items[start : start + size] for start in range(0, len(items), size)]
 
 
 def _training_commit_memory_policy() -> dict[str, Any]:
@@ -223,10 +270,24 @@ def _task_error(task: dict[str, Any] | None) -> str | None:
     return None
 
 
+def _commit_trace_id(commit_result: dict[str, Any]) -> str | None:
+    trace_id = commit_result.get("trace_id")
+    return str(trace_id) if trace_id else None
+
+
+def _commit_telemetry_id(commit_result: dict[str, Any]) -> str | None:
+    telemetry = commit_result.get("telemetry")
+    if not isinstance(telemetry, dict):
+        return None
+    telemetry_id = telemetry.get("id")
+    return str(telemetry_id) if telemetry_id else None
+
+
 def _session_id_for_rollout(rollout: Rollout, *, run_id: str) -> str:
     safe_name = _safe_session_fragment(rollout.case.name)
     metadata = rollout.metadata or {}
-    epoch = metadata.get("execution_metadata", {}).get("epoch", "0")
+    execution_metadata = metadata.get("execution_metadata", {})
+    epoch = execution_metadata.get("epoch", "0")
     task_no = metadata.get("task_no", "0")
     split = metadata.get("data_split", "tau2")
     return f"tau2_train_{run_id}_{split}_e{epoch}_t{task_no}_{safe_name}"

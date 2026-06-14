@@ -123,7 +123,10 @@ async def test_experience_gradient_estimator_converts_experience_operations():
     assert gradient.after_file.content == "new body"
     assert gradient.after_file.extra_fields["supersedes"] == ["older_experience"]
     assert gradient.metadata["supersedes"] == ["older_experience"]
-    assert gradient.evidence_trajectory_uris == [analysis.trajectories[0].uri]
+    assert len(gradient.links) == 1
+    assert gradient.links[0].from_uri == gradient.target_experience_uri
+    assert gradient.links[0].to_uri == analysis.trajectories[0].uri
+    assert gradient.links[0].link_type == "derived_from"
     assert gradient.confidence == pytest.approx(0.9)
     assert gradient.metadata["trajectory_outcome"] == "success"
     assert gradient.metadata["rubric_passed"] is True

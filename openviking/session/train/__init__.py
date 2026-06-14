@@ -2,7 +2,21 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Session training framework for trajectory/experience policy optimization."""
 
-from openviking.session.train.components.case_loader import ListCaseLoader
+from openviking.session.train.batch_runner import (
+    BatchTrainEvalConfig,
+    BatchTrainEvalReport,
+    run_batch_train_eval,
+)
+from openviking.session.train.components.dataset_service import create_dataset_service_app
+from openviking.session.train.components.rollout_artifact_recorder import (
+    RolloutArtifactIndex,
+    RolloutArtifactRecorder,
+)
+from openviking.session.train.components.case_loader import (
+    ListCaseLoader,
+    TrialCaseLoader,
+    make_trial_case_loader,
+)
 from openviking.session.train.components.gradient_estimator import (
     ExperienceGradientContext,
     ExperienceGradientEstimator,
@@ -28,13 +42,27 @@ from openviking.session.train.components.rollout_executor import (
     SingleTurnLLMRolloutExecutor,
     default_single_turn_prompt,
 )
+from openviking.session.train.components.reporter import (
+    ConsolePipelineReporter,
+    NoopPipelineLifecycleHook,
+    PipelineLifecycleHook,
+    emit_run_summary,
+)
+from openviking.session.train.components.report_builder import (
+    PipelineReportBuilder,
+    PipelineReportHook,
+)
 from openviking.session.train.components.session_commit import SessionCommitPolicyTrainer
 from openviking.session.train.components.snapshotter import ContentHashPolicySnapshotter
 from openviking.session.train.components.trajectory_analyzer import (
     TrajectoryAnalyzerContext,
     TrajectoryRolloutAnalyzer,
 )
-from openviking.session.train.context import ExecutionContext, PipelineContext
+from openviking.session.train.context import (
+    ExecutionContext,
+    PipelineContext,
+    PipelineHookDecision,
+)
 from openviking.session.train.domain import (
     Case,
     CriterionResult,
@@ -74,6 +102,12 @@ from openviking.session.train.interfaces import (
 from openviking.session.train.pipeline import OfflinePolicyOptimizationPipeline
 
 __all__ = [
+    "create_dataset_service_app",
+    "run_batch_train_eval",
+    "BatchTrainEvalReport",
+    "BatchTrainEvalConfig",
+    "RolloutArtifactIndex",
+    "RolloutArtifactRecorder",
     "make_streaming_policy_trainer_key",
     "get_streaming_policy_trainer",
     "StreamingPolicyTrainerKey",
@@ -87,6 +121,12 @@ __all__ = [
     "PatchMergePolicyOptimizer",
     "PatchMergePolicyOptimizerContext",
     "PolicyTrainer",
+    "PipelineLifecycleHook",
+    "PipelineReportBuilder",
+    "PipelineReportHook",
+    "ConsolePipelineReporter",
+    "NoopPipelineLifecycleHook",
+    "emit_run_summary",
     "SessionCommitPolicyTrainer",
     "ExperienceSetLoader",
     "DryRunPolicyUpdater",
@@ -104,8 +144,11 @@ __all__ = [
     "ExperienceSet",
     "GradientEstimator",
     "ListCaseLoader",
+    "TrialCaseLoader",
+    "make_trial_case_loader",
     "PatchSemanticGradient",
     "PipelineContext",
+    "PipelineHookDecision",
     "PipelineEvaluationResult",
     "PipelineEpochResult",
     "PipelineResult",

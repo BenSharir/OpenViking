@@ -82,11 +82,11 @@ class ThreeStateBarColumn(ProgressColumn):
 
         bar = Text()
         if done_width > 0:
-            bar.append("█" * done_width, style=self.complete_style)
+            bar.append("█" * done_width, style="green")
         if running_width > 0:
-            bar.append("▓" * running_width, style=self.finished_style)
+            bar.append("▓" * running_width, style="yellow")
         if pending_width > 0:
-            bar.append("░" * pending_width, style="bar.back")
+            bar.append("░" * pending_width, style="dim")
 
         return bar
 

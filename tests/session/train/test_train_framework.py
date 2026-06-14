@@ -11,13 +11,17 @@ import pytest
 from test_fakes import InMemoryAGFS, fake_request_context
 
 from openviking.message import Message, TextPart
+from openviking.session.memory.dataclass import StoredLink
 from openviking.session.train import (
     Case,
     Experience,
     ExperienceSet,
     ListCaseLoader,
     OfflinePolicyOptimizationPipeline,
+    NoopPipelineLifecycleHook,
+    PipelineReportHook,
     PipelineContext,
+    PipelineHookDecision,
     PolicyApplyResult,
     PolicyUpdatePlan,
     Rollout,
@@ -112,7 +116,7 @@ class DummyGradient:
     target_experience_uri: str | None
     base_version: int | None
     rationale: str
-    evidence_trajectory_uris: list[str]
+    links: list[StoredLink]
     confidence: float
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -197,7 +201,14 @@ class DummyEstimator:
                 target_experience_uri=experience_set.policies[0].uri,
                 base_version=experience_set.policies[0].version,
                 rationale="trajectory succeeded",
-                evidence_trajectory_uris=[traj.uri],
+                links=[
+                    StoredLink(
+                        from_uri=experience_set.policies[0].uri,
+                        to_uri=traj.uri,
+                        link_type="derived_from",
+                        weight=1.0,
+                    )
+                ],
                 confidence=0.9,
             )
         ]
@@ -243,6 +254,54 @@ class DummyUpdater:
             updated_policy_set=updated,
             written_uris=[p.uri for p in updated.policies],
         )
+
+
+class RecordingLifecycleHook(NoopPipelineLifecycleHook):
+    def __init__(self):
+        self.events: list[tuple[str, Any]] = []
+
+    def on_epoch_start(self, *, epoch: int, context: Any) -> None:
+        del context
+        self.events.append(("epoch_start", epoch))
+
+    async def on_epoch_end(
+        self,
+        *,
+        epoch_result: Any,
+        policy_set: Any,
+        context: Any,
+    ) -> PipelineHookDecision | None:
+        del policy_set, context
+        self.events.append(("epoch_end", epoch_result.epoch))
+        return None
+
+    def on_train_rollout_report(
+        self,
+        *,
+        report: dict[str, Any],
+        context: Any,
+    ) -> None:
+        del context
+        self.events.append(("train_rollout_report", report["epoch"]))
+
+    def on_train_report(
+        self,
+        *,
+        report: dict[str, Any],
+        context: Any,
+    ) -> None:
+        del context
+        self.events.append(("train_report", report["epoch"]))
+
+    def on_eval_report(
+        self,
+        *,
+        label: str,
+        report: dict[str, Any],
+        context: Any,
+    ) -> None:
+        del context
+        self.events.append(("eval_report", label, report["epoch"]))
 
 
 @pytest.mark.asyncio
@@ -318,6 +377,90 @@ async def test_offline_policy_optimization_pipeline_supports_train_and_eval():
     assert result.metadata["final_score"] == 2.0
     assert result.metadata["score_delta"] == 1.0
     assert result.apply_result.updated_policy_set.policies[0].version == 3
+
+
+@pytest.mark.asyncio
+async def test_offline_policy_optimization_pipeline_epoch_hook_can_stop_training():
+    pipeline = OfflinePolicyOptimizationPipeline(
+        snapshotter=DummySnapshotter(),
+        rollout_executor=DummyExecutor(),
+        rollout_analyzer=DummyAnalyzer(),
+        gradient_estimator=DummyEstimator(),
+        policy_optimizer=DummyOptimizer(),
+        policy_updater=DummyUpdater(),
+    )
+    class StopTrainingHook(NoopPipelineLifecycleHook):
+        def __init__(self):
+            self.epochs: list[int] = []
+
+        async def on_epoch_end(
+            self,
+            *,
+            epoch_result: Any,
+            policy_set: Any,
+            context: Any,
+        ) -> PipelineHookDecision:
+            del policy_set, context
+            self.epochs.append(epoch_result.epoch)
+            return PipelineHookDecision(
+                stop_training=True,
+                reason="unit test stop",
+                metadata={"epoch": epoch_result.epoch},
+            )
+
+    hook = StopTrainingHook()
+
+    result = await pipeline.train(
+        case_loader=ListCaseLoader([_case()]),
+        policy_set=_policy_set(),
+        context=PipelineContext(max_epochs=3, lifecycle_hooks=[hook]),
+    )
+
+    assert hook.epochs == [0]
+    assert [item.epoch for item in result.epochs] == [0]
+    assert result.metadata["completed_epochs"] == 1
+    assert result.metadata["max_epochs"] == 3
+    assert result.metadata["stopped_early"] is True
+    assert result.metadata["stop_reason"] == "unit test stop"
+    assert result.metadata["stop_metadata"] == {"epoch": 0}
+
+
+@pytest.mark.asyncio
+async def test_pipeline_lifecycle_hooks_receive_report_events():
+    hook = RecordingLifecycleHook()
+    pipeline = OfflinePolicyOptimizationPipeline(
+        snapshotter=DummySnapshotter(),
+        rollout_executor=DummyExecutor(),
+        rollout_analyzer=DummyAnalyzer(),
+        gradient_estimator=DummyEstimator(),
+        policy_optimizer=DummyOptimizer(),
+        policy_updater=DummyUpdater(),
+    )
+
+    policy_set = _policy_set()
+    await pipeline.train(
+        case_loader=ListCaseLoader([_case()]),
+        policy_set=policy_set,
+        context=PipelineContext(
+            lifecycle_hooks=[PipelineReportHook(), hook],
+        ),
+    )
+    await pipeline.eval(
+        case_loader=ListCaseLoader([_case()]),
+        policy_set=policy_set,
+        context=PipelineContext(
+            lifecycle_hooks=[PipelineReportHook(), hook],
+            execution_metadata={"epoch": 1, "rollout_stage": "final_test_rollout"},
+        ),
+    )
+
+    assert hook.events == [
+        ("epoch_start", 0),
+        ("train_rollout_report", 0),
+        ("epoch_end", 0),
+        ("train_report", 0),
+        ("eval_report", "final_test_rollout", 1),
+    ]
 
 
 @pytest.mark.asyncio
@@ -606,18 +749,24 @@ class FakeSessionCommitClient:
         self.created_sessions = []
         self.messages = {}
         self.committed_sessions = []
+        self.task_poll_counts = {}
 
     async def create_session(self, *, session_id, memory_policy=None):
         self.created_sessions.append((session_id, memory_policy))
 
     async def batch_add_messages(self, session_id, messages):
-        self.messages[session_id] = messages
+        self.messages.setdefault(session_id, []).extend(messages)
 
-    async def commit_session(self, session_id, *, keep_recent_count=0):
-        self.committed_sessions.append((session_id, keep_recent_count))
-        return {"task_id": f"task-{session_id}", "trace_id": f"trace-{session_id}"}
+    async def commit_session(self, session_id, telemetry=False, *, keep_recent_count=0):
+        self.committed_sessions.append((session_id, keep_recent_count, telemetry))
+        return {
+            "task_id": f"task-{session_id}",
+            "archive_uri": f"viking://user/default/sessions/{session_id}/history/archive_001",
+            "trace_id": f"trace-{session_id}",
+        }
 
     async def get_task(self, task_id):
+        self.task_poll_counts[task_id] = self.task_poll_counts.get(task_id, 0) + 1
         return {"task_id": task_id, "status": "completed", "result": {}}
 
 
@@ -645,12 +794,113 @@ async def test_session_commit_policy_trainer_records_commit_trace_id():
 
     commit_result = result.apply_result.metadata["commit_results"][0]
     assert commit_result["task_id"] == f"task-{commit_result['session_id']}"
+    assert commit_result["archive_uri"].endswith("/history/archive_001")
     assert commit_result["trace_id"] == f"trace-{commit_result['session_id']}"
     assert commit_result["task_status"] == "completed"
-    assert client.committed_sessions == [(commit_result["session_id"], 2)]
+    assert client.committed_sessions == [(commit_result["session_id"], 2, True)]
     assert client.created_sessions == [
         (
             commit_result["session_id"],
             {"memory_types": ["cases", "trajectories", "experiences"]},
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_session_commit_policy_trainer_splits_large_message_batches():
+    from openviking.session.train import SessionCommitPolicyTrainer
+
+    client = FakeSessionCommitClient()
+    batch_sizes = []
+
+    async def batch_add_messages(session_id, messages):
+        batch_sizes.append(len(messages))
+        client.messages.setdefault(session_id, []).extend(messages)
+
+    client.batch_add_messages = batch_add_messages
+    trainer = SessionCommitPolicyTrainer(
+        client=client,
+        run_id="run1",
+        poll_interval_seconds=0.01,
+    )
+    rollout = Rollout(
+        case=_case(),
+        messages=[
+            Message(id=f"m{i}", role="user", parts=[TextPart(text=f"hello {i}")])
+            for i in range(250)
+        ],
+        policy_snapshot_id="snapshot-1",
+        evaluation=RubricEvaluation(passed=True, score=1.0, criterion_results=[], feedback=[]),
+        metadata={"data_split": "unit", "task_no": 7, "execution_metadata": {"epoch": 3}},
+    )
+
+    result = await trainer.train_rollouts([rollout], _policy_set())
+
+    commit_result = result.apply_result.metadata["commit_results"][0]
+    assert commit_result["error"] is None
+    assert batch_sizes == [100, 100, 52]
+    assert len(client.messages[commit_result["session_id"]]) == 252
+
+
+class DelayedSessionCommitClient(FakeSessionCommitClient):
+    def __init__(self, *, pending_polls: int):
+        super().__init__()
+        self.pending_polls = pending_polls
+
+    async def get_task(self, task_id):
+        self.task_poll_counts[task_id] = self.task_poll_counts.get(task_id, 0) + 1
+        if self.task_poll_counts[task_id] <= self.pending_polls:
+            return {"task_id": task_id, "status": "running", "result": {}}
+        return {"task_id": task_id, "status": "completed", "result": {}}
+
+
+@pytest.mark.asyncio
+async def test_session_commit_policy_trainer_waits_without_default_timeout():
+    from openviking.session.train import SessionCommitPolicyTrainer
+
+    client = DelayedSessionCommitClient(pending_polls=3)
+    trainer = SessionCommitPolicyTrainer(
+        client=client,
+        run_id="run1",
+        poll_interval_seconds=0.01,
+    )
+    rollout = Rollout(
+        case=_case(),
+        messages=[Message(id="m1", role="user", parts=[TextPart(text="hello")])],
+        policy_snapshot_id="snapshot-1",
+        evaluation=RubricEvaluation(passed=True, score=1.0, criterion_results=[], feedback=[]),
+        metadata={"data_split": "unit", "task_no": 7, "execution_metadata": {"epoch": 3}},
+    )
+
+    result = await asyncio.wait_for(trainer.train_rollouts([rollout], _policy_set()), timeout=1.0)
+
+    commit_result = result.apply_result.metadata["commit_results"][0]
+    assert commit_result["task_status"] == "completed"
+    assert commit_result["error"] is None
+    assert client.task_poll_counts[commit_result["task_id"]] == 4
+
+
+@pytest.mark.asyncio
+async def test_session_commit_policy_trainer_can_still_use_explicit_timeout():
+    from openviking.session.train import SessionCommitPolicyTrainer
+
+    client = DelayedSessionCommitClient(pending_polls=100)
+    trainer = SessionCommitPolicyTrainer(
+        client=client,
+        run_id="run1",
+        poll_interval_seconds=0.01,
+        timeout_seconds=0.02,
+    )
+    rollout = Rollout(
+        case=_case(),
+        messages=[Message(id="m1", role="user", parts=[TextPart(text="hello")])],
+        policy_snapshot_id="snapshot-1",
+        evaluation=RubricEvaluation(passed=True, score=1.0, criterion_results=[], feedback=[]),
+        metadata={"data_split": "unit", "task_no": 7, "execution_metadata": {"epoch": 3}},
+    )
+
+    result = await trainer.train_rollouts([rollout], _policy_set())
+
+    commit_result = result.apply_result.metadata["commit_results"][0]
+    assert commit_result["task_status"] == "timeout"
+    assert commit_result["error"] == "commit task timeout"

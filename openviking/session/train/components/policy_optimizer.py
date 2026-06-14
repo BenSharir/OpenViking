@@ -9,7 +9,7 @@ from typing import Any
 
 from openviking.message import Message
 from openviking.server.identity import RequestContext
-from openviking.session.memory.dataclass import MemoryFile
+from openviking.session.memory.dataclass import MemoryFile, StoredLink
 from openviking.session.memory.extract_loop import ExtractLoop
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.memory_updater import ExtractContext
@@ -195,7 +195,7 @@ def _log_merge_input(
                 f"target_experience_uri: {gradient.target_experience_uri}",
                 f"base_version: {gradient.base_version}",
                 f"confidence: {gradient.confidence}",
-                f"evidence_trajectory_uris: {list(gradient.evidence_trajectory_uris)}",
+                f"links: {_links_to_dicts(gradient.links)}",
                 f"rationale: {gradient.rationale}",
             ]
         )
@@ -240,7 +240,7 @@ def _log_merge_output(
                 f"target_experience_uri: {item.target_experience_uri}",
                 f"base_version: {item.base_version}",
                 f"confidence: {item.confidence}",
-                f"evidence_trajectory_uris: {item.evidence_trajectory_uris}",
+                f"links: {_links_to_dicts(item.links)}",
                 "before_content:",
                 str(item.before_content),
                 "after_content:",
@@ -281,7 +281,7 @@ def _gradient_to_dict(index: int, gradient: SemanticGradient) -> dict[str, Any]:
         "target_experience_uri": gradient.target_experience_uri,
         "base_version": gradient.base_version,
         "rationale": gradient.rationale,
-        "evidence_trajectory_uris": list(gradient.evidence_trajectory_uris),
+        "links": _links_to_dicts(gradient.links),
         "confidence": gradient.confidence,
         "metadata": dict(gradient.metadata),
     }
@@ -303,6 +303,10 @@ def _memory_file_to_dict(file: MemoryFile) -> dict[str, Any]:
         "extra_fields": dict(file.extra_fields or {}),
     }
 
+
+def _links_to_dicts(links: list[StoredLink] | None) -> list[dict[str, Any]]:
+    return [link.model_dump() for link in links or []]
+
 def _gradient_to_merge_patch(gradient: SemanticGradient) -> PatchMergePatch:
     return PatchMergePatch(
         before_file=gradient.before_file,
@@ -310,7 +314,7 @@ def _gradient_to_merge_patch(gradient: SemanticGradient) -> PatchMergePatch:
         metadata={
             "base_version": gradient.base_version,
             "rationale": gradient.rationale,
-            "evidence_trajectory_uris": list(gradient.evidence_trajectory_uris),
+            "links": _links_to_dicts(gradient.links),
             "confidence": gradient.confidence,
             "gradient_metadata": _compact_gradient_metadata(gradient.metadata),
         },
@@ -361,6 +365,8 @@ def _experience_to_memory_file(experience: Experience) -> MemoryFile:
     return MemoryFile(
         uri=experience.uri,
         content=experience.content,
+        links=list(experience.links or []),
+        backlinks=list(experience.backlinks or []),
         memory_type="experiences",
         extra_fields={
             **dict(experience.metadata),
@@ -379,9 +385,7 @@ def _operations_to_plan_items(
     memory_type: str,
 ) -> list[PolicyPlanItem]:
     items: list[PolicyPlanItem] = []
-    evidence_uris = sorted(
-        {uri for gradient in gradients for uri in list(gradient.evidence_trajectory_uris)}
-    )
+    links = _merge_gradient_links(gradients)
     confidence_values = [float(gradient.confidence) for gradient in gradients]
     confidence = max(confidence_values) if confidence_values else None
 
@@ -412,7 +416,7 @@ def _operations_to_plan_items(
                     policy_set,
                 ),
                 confidence=confidence,
-                evidence_trajectory_uris=evidence_uris,
+                links=_remap_links_from_uri(links, target_uri or ""),
                 metadata={
                     "rationale": "PatchMergeContextProvider merged semantic gradients via ExtractLoop.",
                     "merge_gradient_count": len(gradients),
@@ -435,7 +439,7 @@ def _operations_to_plan_items(
                 before_content=old_file.plain_content(),
                 after_content=None,
                 confidence=confidence,
-                evidence_trajectory_uris=evidence_uris,
+                links=_remap_links_from_uri(links, target_uri or ""),
                 metadata={
                     "rationale": "PatchMergeContextProvider merge requested memory deletion.",
                     "merge_gradient_count": len(gradients),
@@ -443,6 +447,35 @@ def _operations_to_plan_items(
             )
         )
     return items
+
+
+def _merge_gradient_links(gradients: list[SemanticGradient]) -> list[StoredLink]:
+    merged: list[StoredLink] = []
+    seen: set[tuple[str, str, str | None]] = set()
+    for gradient in gradients:
+        for link in gradient.links or []:
+            if not _is_source_trajectory_link(link):
+                continue
+            key = (link.from_uri, link.to_uri, link.match_text)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(link)
+    return merged
+
+
+def _is_source_trajectory_link(link: StoredLink) -> bool:
+    return (
+        link.link_type == "derived_from"
+        and bool(link.to_uri)
+        and "/memories/trajectories/" in link.to_uri
+    )
+
+
+def _remap_links_from_uri(links: list[StoredLink], from_uri: str) -> list[StoredLink]:
+    if not from_uri:
+        return list(links)
+    return [link.model_copy(update={"from_uri": from_uri}) for link in links]
 
 def _find_policy_by_uri(policy_set: ExperienceSet, uri: str) -> Experience | None:
     for policy in policy_set.policies:

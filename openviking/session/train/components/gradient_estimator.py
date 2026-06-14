@@ -12,7 +12,7 @@ from openviking.server.identity import RequestContext
 from openviking.session.memory.agent_experience_context_provider import (
     AgentExperienceContextProvider,
 )
-from openviking.session.memory.dataclass import MemoryFile
+from openviking.session.memory.dataclass import MemoryFile, StoredLink
 from openviking.session.memory.extract_loop import ExtractLoop
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.memory_updater import ExtractContext
@@ -179,7 +179,14 @@ def _operations_to_gradients(
                     "ExtractLoop proposed an experience content update "
                     f"from trajectory {trajectory.uri}."
                 ),
-                evidence_trajectory_uris=[trajectory.uri],
+                links=[
+                    StoredLink(
+                        from_uri=target_uri or "",
+                        to_uri=trajectory.uri,
+                        link_type="derived_from",
+                        weight=1.0,
+                    )
+                ],
                 confidence=_confidence(trajectory, analysis),
                 metadata={
                     "memory_fields": fields,

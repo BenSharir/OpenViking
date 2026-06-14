@@ -1,30 +1,21 @@
-#!/usr/bin/env python3
-"""HTTP service exposing tau2 cases and rollout execution."""
-
-# ruff: noqa: E402
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
+"""Generic HTTP service host for remote benchmark datasets."""
 
 from __future__ import annotations
 
-import argparse
 import asyncio
-import os
-import sys
+import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-from benchmark.tau2.train.case_loader import Tau2CaseLoader
-from benchmark.tau2.train.rollout_executor import Tau2RolloutExecutor
 from openviking.session.train.context import ExecutionContext
 from openviking.session.train.domain import (
     Case,
@@ -36,8 +27,13 @@ from openviking.session.train.domain import (
 )
 
 
+CaseLoaderFactory = Callable[[str, str, str, dict[str, Any]], Any]
+RolloutExecutorFactory = Callable[[dict[str, Any]], Any]
+logger = logging.getLogger(__name__)
+
+
 class CasesQueryRequest(BaseModel):
-    dataset: str = "tau2"
+    dataset: str
     domain: str
     split: str
     cursor: str | None = None
@@ -53,7 +49,7 @@ class RolloutExecuteRequest(BaseModel):
 
 
 @dataclass(slots=True)
-class _RolloutExecution:
+class RolloutExecution:
     execution_id: str
     status: str
     created_at: float
@@ -63,14 +59,14 @@ class _RolloutExecution:
     error: str | None = None
 
 
-class _RolloutExecutionStore:
+class RolloutExecutionStore:
     def __init__(self) -> None:
-        self._executions: dict[str, _RolloutExecution] = {}
+        self._executions: dict[str, RolloutExecution] = {}
         self._lock = asyncio.Lock()
 
-    async def create(self, *, case_name: str) -> _RolloutExecution:
+    async def create(self, *, case_name: str) -> RolloutExecution:
         now = time.time()
-        execution = _RolloutExecution(
+        execution = RolloutExecution(
             execution_id=f"rollout_exec_{uuid4().hex}",
             status="running",
             created_at=now,
@@ -81,9 +77,16 @@ class _RolloutExecutionStore:
             self._executions[execution.execution_id] = execution
         return execution
 
-    async def get(self, execution_id: str) -> _RolloutExecution | None:
+    async def get(self, execution_id: str) -> RolloutExecution | None:
         async with self._lock:
             return self._executions.get(execution_id)
+
+    async def count_by_status(self) -> dict[str, int]:
+        async with self._lock:
+            counts: dict[str, int] = {}
+            for execution in self._executions.values():
+                counts[execution.status] = counts.get(execution.status, 0) + 1
+            return counts
 
     async def mark_completed(self, execution_id: str, rollout: Rollout) -> None:
         await self._update(execution_id, status="completed", rollout=rollout)
@@ -99,56 +102,75 @@ class _RolloutExecutionStore:
             execution.updated_at = time.time()
 
 
-def create_app(
+def create_dataset_service_app(
     *,
-    data_root: str | None = None,
-    config_path: str | None = None,
-    rollout_language: str = "default",
+    service_name: str,
+    make_case_loader: CaseLoaderFactory,
+    make_rollout_executor: RolloutExecutorFactory,
+    max_rollout_concurrency: int | None = None,
 ) -> FastAPI:
-    if rollout_language not in {"default", "zh"}:
-        raise ValueError("rollout_language must be 'default' or 'zh'")
-    app = FastAPI(title="OpenViking Tau2 Rollout Service")
-    app.state.data_root = data_root
-    app.state.config_path = config_path
-    app.state.rollout_language = rollout_language
-    app.state.rollout_executions = _RolloutExecutionStore()
+    """Create a generic remote dataset service from train framework components."""
+
+    if max_rollout_concurrency is not None and max_rollout_concurrency <= 0:
+        raise ValueError("max_rollout_concurrency must be > 0")
+
+    app = FastAPI(title=f"OpenViking {service_name} Dataset Service")
+    app.state.service_name = service_name
+    app.state.make_case_loader = make_case_loader
+    app.state.make_rollout_executor = make_rollout_executor
+    app.state.rollout_executions = RolloutExecutionStore()
+    app.state.max_rollout_concurrency = max_rollout_concurrency
+    app.state.rollout_semaphore = (
+        asyncio.Semaphore(max_rollout_concurrency)
+        if max_rollout_concurrency is not None
+        else None
+    )
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
-        return {"status": "ok", "service": "tau2", "rollout_language": app.state.rollout_language}
+        return {
+            "status": "ok",
+            "service": app.state.service_name,
+            "max_rollout_concurrency": app.state.max_rollout_concurrency,
+            "rollout_executions": await app.state.rollout_executions.count_by_status(),
+        }
 
     @app.post("/v1/cases/query")
     async def query_cases(request: CasesQueryRequest) -> dict[str, Any]:
-        if request.dataset != "tau2":
-            raise ValueError(f"Unsupported dataset: {request.dataset}")
-        offset = int(request.cursor or "0")
-        loader = Tau2CaseLoader(
-            domain=request.domain,
-            split=request.split,
-            data_root=app.state.data_root,
+        loader = app.state.make_case_loader(
+            request.dataset,
+            request.domain,
+            request.split,
+            dict(request.filters or {}),
         )
-        all_cases = loader.load_cases()
-        selected = all_cases[offset : offset + request.limit]
-        next_offset = offset + len(selected)
-        next_cursor = str(next_offset) if next_offset < len(all_cases) else None
+        cases = await _load_case_page(
+            loader,
+            cursor=request.cursor,
+            limit=request.limit,
+        )
+        next_offset = int(request.cursor or "0") + len(cases)
+        next_cursor = str(next_offset) if len(cases) >= request.limit else None
         return {
-            "cases": [_case_to_dict(case) for case in selected],
+            "cases": [case_to_dict(case) for case in cases],
             "next_cursor": next_cursor,
         }
 
     @app.post("/v1/rollouts/execute")
     async def execute_rollout(request: RolloutExecuteRequest) -> dict[str, Any]:
-        case = _case_from_dict(request.case)
+        case = case_from_dict(request.case)
         execution = await app.state.rollout_executions.create(case_name=case.name)
         asyncio.create_task(_run_rollout_execution(app, execution.execution_id, request))
-        return _execution_to_dict(execution)
+        return execution_to_dict(execution)
 
     @app.get("/v1/rollouts/executions/{execution_id}")
     async def get_rollout_execution(execution_id: str) -> dict[str, Any]:
         execution = await app.state.rollout_executions.get(execution_id)
         if execution is None:
-            raise HTTPException(status_code=404, detail=f"Rollout execution not found: {execution_id}")
-        return _execution_to_dict(execution)
+            raise HTTPException(
+                status_code=404,
+                detail=f"Rollout execution not found: {execution_id}",
+            )
+        return execution_to_dict(execution)
 
     return app
 
@@ -158,29 +180,59 @@ async def _run_rollout_execution(
     execution_id: str,
     request: RolloutExecuteRequest,
 ) -> None:
+    case = case_from_dict(request.case)
     try:
-        options = dict(request.options or {})
-        executor = Tau2RolloutExecutor(
-            config_path=options.get("config_path") or app.state.config_path,
-            concurrency=1,
-            keep_default_tools=bool(options.get("keep_default_tools", True)),
-            max_iterations=int(options.get("max_iterations") or 30),
-            rollout_language=str(options.get("rollout_language") or app.state.rollout_language),
-        )
-        rollouts = await executor.execute(
-            [_case_from_dict(request.case)],
-            _policy_set_from_dict(request.policy_set),
-            ExecutionContext(
-                policy_snapshot_id=str(request.execution_context["policy_snapshot_id"]),
-                metadata=dict(request.execution_context.get("metadata") or {}),
-            ),
-        )
-        await app.state.rollout_executions.mark_completed(execution_id, rollouts[0])
+        semaphore = app.state.rollout_semaphore
+        if semaphore is None:
+            rollout = await _execute_rollout_request(app, request, case)
+        else:
+            async with semaphore:
+                rollout = await _execute_rollout_request(app, request, case)
+        await app.state.rollout_executions.mark_completed(execution_id, rollout)
     except Exception as exc:
+        logger.exception(
+            "rollout execution failed execution_id=%s case=%s",
+            execution_id,
+            case.name,
+        )
         await app.state.rollout_executions.mark_failed(execution_id, str(exc))
 
 
-def _execution_to_dict(execution: _RolloutExecution) -> dict[str, Any]:
+async def _execute_rollout_request(
+    app: FastAPI,
+    request: RolloutExecuteRequest,
+    case: Case,
+) -> Rollout:
+    options = dict(request.options or {})
+    executor = app.state.make_rollout_executor(options)
+    rollouts = await executor.execute(
+        [case],
+        policy_set_from_dict(request.policy_set),
+        ExecutionContext(
+            policy_snapshot_id=str(request.execution_context["policy_snapshot_id"]),
+            metadata=dict(request.execution_context.get("metadata") or {}),
+        ),
+    )
+    return rollouts[0]
+
+
+async def _load_case_page(loader: Any, *, cursor: str | None, limit: int) -> list[Case]:
+    offset = int(cursor or "0")
+    selected: list[Case] = []
+    seen = 0
+    async for batch in loader.batches(None):
+        for case in batch:
+            if seen < offset:
+                seen += 1
+                continue
+            if len(selected) >= limit:
+                return selected
+            selected.append(case)
+            seen += 1
+    return selected
+
+
+def execution_to_dict(execution: RolloutExecution) -> dict[str, Any]:
     data: dict[str, Any] = {
         "execution_id": execution.execution_id,
         "status": execution.status,
@@ -190,11 +242,11 @@ def _execution_to_dict(execution: _RolloutExecution) -> dict[str, Any]:
         "error": execution.error,
     }
     if execution.rollout is not None:
-        data["rollout"] = _rollout_to_dict(execution.rollout)
+        data["rollout"] = rollout_to_dict(execution.rollout)
     return data
 
 
-def _case_to_dict(case: Case) -> dict[str, Any]:
+def case_to_dict(case: Case) -> dict[str, Any]:
     return {
         "name": case.name,
         "task_signature": case.task_signature,
@@ -218,7 +270,7 @@ def _case_to_dict(case: Case) -> dict[str, Any]:
     }
 
 
-def _case_from_dict(data: dict[str, Any]) -> Case:
+def case_from_dict(data: dict[str, Any]) -> Case:
     rubric = data["rubric"]
     return Case(
         name=data["name"],
@@ -243,7 +295,7 @@ def _case_from_dict(data: dict[str, Any]) -> Case:
     )
 
 
-def _policy_set_from_dict(data: dict[str, Any]) -> ExperienceSet:
+def policy_set_from_dict(data: dict[str, Any]) -> ExperienceSet:
     return ExperienceSet(
         root_uri=data["root_uri"],
         policies=[],
@@ -251,30 +303,29 @@ def _policy_set_from_dict(data: dict[str, Any]) -> ExperienceSet:
     )
 
 
-def _rollout_to_dict(rollout: Rollout) -> dict[str, Any]:
+def rollout_to_dict(rollout: Rollout) -> dict[str, Any]:
     return {
-        "case": _case_to_dict(rollout.case),
+        "case": case_to_dict(rollout.case),
         "messages": [message.to_dict() for message in rollout.messages],
         "policy_snapshot_id": rollout.policy_snapshot_id,
-        "evaluation": _jsonable(_evaluation_to_dict(rollout.evaluation)),
-        "metadata": _jsonable(rollout.metadata),
+        "evaluation": jsonable(evaluation_to_dict(rollout.evaluation)),
+        "metadata": jsonable(rollout.metadata),
     }
 
 
-
-
-def _jsonable(value: Any) -> Any:
+def jsonable(value: Any) -> Any:
     if hasattr(value, "model_dump"):
-        return _jsonable(value.model_dump(mode="json"))
+        return jsonable(value.model_dump(mode="json"))
     if isinstance(value, Enum):
         return value.value
     if isinstance(value, dict):
-        return {str(_jsonable(key)): _jsonable(item) for key, item in value.items()}
+        return {str(jsonable(key)): jsonable(item) for key, item in value.items()}
     if isinstance(value, list | tuple):
-        return [_jsonable(item) for item in value]
+        return [jsonable(item) for item in value]
     return value
 
-def _evaluation_to_dict(evaluation: RubricEvaluation | None) -> dict[str, Any] | None:
+
+def evaluation_to_dict(evaluation: RubricEvaluation | None) -> dict[str, Any] | None:
     if evaluation is None:
         return None
     return {
@@ -294,32 +345,3 @@ def _evaluation_to_dict(evaluation: RubricEvaluation | None) -> dict[str, Any] |
         "feedback": evaluation.feedback,
         "metadata": evaluation.metadata,
     }
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Start tau2 rollout HTTP service")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=1944)
-    parser.add_argument("--data-root", default=os.getenv("TAU2_DATA_ROOT"))
-    parser.add_argument("--config", default=os.getenv("OPENVIKING_CONFIG_FILE"))
-    parser.add_argument("--rollout-language", choices=["default", "zh"], default="default")
-    return parser.parse_args()
-
-
-def main() -> None:
-    args = parse_args()
-    import uvicorn
-
-    uvicorn.run(
-        create_app(
-            data_root=args.data_root,
-            config_path=args.config,
-            rollout_language=args.rollout_language,
-        ),
-        host=args.host,
-        port=args.port,
-    )
-
-
-if __name__ == "__main__":
-    main()

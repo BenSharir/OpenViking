@@ -7,7 +7,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Any, Protocol
 
-from openviking.session.memory.dataclass import MemoryFile
+from openviking.session.memory.dataclass import MemoryFile, StoredLink
 from openviking.session.train.context import ExecutionContext
 from openviking.session.train.domain import (
     Case,
@@ -45,7 +45,7 @@ class SemanticGradient(Protocol):
     def rationale(self) -> str: ...
 
     @property
-    def evidence_trajectory_uris(self) -> list[str]: ...
+    def links(self) -> list[StoredLink]: ...
 
     @property
     def confidence(self) -> float: ...
