@@ -42,6 +42,7 @@ CONFIG="${OPENVIKING_CONFIG_FILE:-${HOME}/.openviking/ov.conf}"
 KILL_EXISTING=1
 ROLLOUT_LANGUAGE="default"
 ROLLOUT_BACKEND="${TAU2_ROLLOUT_BACKEND:-native}"
+NATIVE_THREAD_WORKERS="${TAU2_NATIVE_THREAD_WORKERS:-128}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -51,6 +52,7 @@ while [[ $# -gt 0 ]]; do
     --config) CONFIG="$2"; shift 2 ;;
     --rollout-language) ROLLOUT_LANGUAGE="$2"; shift 2 ;;
     --rollout-backend) ROLLOUT_BACKEND="$2"; shift 2 ;;
+    --native-thread-workers) NATIVE_THREAD_WORKERS="$2"; shift 2 ;;
     --no-kill-existing) KILL_EXISTING=0; shift 1 ;;
     -h|--help)
       cat <<'EOF'
@@ -64,6 +66,8 @@ Options:
                      Rollout response language. Use zh for Chinese user-facing replies.
   --rollout-backend native|vikingbot
                      Rollout implementation backend. Default: native.
+  --native-thread-workers N
+                     Default thread pool workers for native rollout. Default: 128.
   --no-kill-existing Do not stop existing process listening on --port
 EOF
       exit 0 ;;
@@ -78,6 +82,11 @@ fi
 
 if [[ "${ROLLOUT_BACKEND}" != "native" && "${ROLLOUT_BACKEND}" != "vikingbot" ]]; then
   echo "[tau2-service] invalid --rollout-backend: ${ROLLOUT_BACKEND}. Expected native or vikingbot" >&2
+  exit 1
+fi
+
+if ! [[ "${NATIVE_THREAD_WORKERS}" =~ ^[0-9]+$ ]] || [[ "${NATIVE_THREAD_WORKERS}" -le 0 ]]; then
+  echo "[tau2-service] invalid --native-thread-workers: ${NATIVE_THREAD_WORKERS}. Expected positive integer" >&2
   exit 1
 fi
 
@@ -116,7 +125,8 @@ export USER_API_BASE="${USER_API_BASE:-${OPENAI_API_BASE}}"
 
 cd "${REPO_ROOT}"
 export TAU2_ROLLOUT_BACKEND="${ROLLOUT_BACKEND}"
-echo "[tau2-service] host=${HOST} port=${PORT} data_root=${DATA_ROOT} config=${CONFIG} rollout_language=${ROLLOUT_LANGUAGE} rollout_backend=${ROLLOUT_BACKEND}"
+export TAU2_NATIVE_THREAD_WORKERS="${NATIVE_THREAD_WORKERS}"
+echo "[tau2-service] host=${HOST} port=${PORT} data_root=${DATA_ROOT} config=${CONFIG} rollout_language=${ROLLOUT_LANGUAGE} rollout_backend=${ROLLOUT_BACKEND} native_thread_workers=${NATIVE_THREAD_WORKERS}"
 if [[ "${KILL_EXISTING}" == "1" ]]; then
   EXISTING_PIDS="$(lsof -tiTCP:"${PORT}" -sTCP:LISTEN 2>/dev/null || true)"
   if [[ -n "${EXISTING_PIDS}" ]]; then
@@ -135,4 +145,4 @@ if [[ "${KILL_EXISTING}" == "1" ]]; then
     fi
   fi
 fi
-exec "${PYTHON_BIN}" "${SCRIPT_DIR}/service_app.py" --host "${HOST}" --port "${PORT}" --data-root "${DATA_ROOT}" --config "${CONFIG}" --rollout-language "${ROLLOUT_LANGUAGE}" --rollout-backend "${ROLLOUT_BACKEND}"
+exec "${PYTHON_BIN}" "${SCRIPT_DIR}/service_app.py" --host "${HOST}" --port "${PORT}" --data-root "${DATA_ROOT}" --config "${CONFIG}" --rollout-language "${ROLLOUT_LANGUAGE}" --rollout-backend "${ROLLOUT_BACKEND}" --native-thread-workers "${NATIVE_THREAD_WORKERS}"

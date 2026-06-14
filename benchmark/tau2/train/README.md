@@ -56,11 +56,13 @@ bash openviking/session/train/run_batch_train_eval.sh \
   --benchmark-service-url http://127.0.0.1:1944
 ```
 
-Default concurrency:
+Default concurrency and output behavior:
 
 - rollout concurrency: `150`
 - session.commit concurrency: `100`
 - eval trials: `8`
+- `--clean-result` is enabled by default and clears previous `result/tau2/train/` artifacts before each run. Use `--no-clean-result` to keep previous runs.
+- Streaming JSONL events are written to `result/tau2/train/<domain>_<timestamp>/events.jsonl`; train commit events include `trace_id` for live `tail -f` debugging. Use `--events-output` to override the path.
 
 Override examples:
 

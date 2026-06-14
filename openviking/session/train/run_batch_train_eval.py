@@ -43,6 +43,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--user-id", default="default", help="OpenViking trusted user id. Default: default")
     parser.add_argument("--output", default=None, help="JSON report output path")
     parser.add_argument(
+        "--events-output",
+        default=None,
+        help="Streaming JSONL event output path. Defaults to report directory/events.jsonl.",
+    )
+    parser.add_argument(
         "--benchmark-service-url",
         default=None,
         help="Benchmark runtime service URL, e.g. http://127.0.0.1:1944",
@@ -87,6 +92,20 @@ def parse_args() -> argparse.Namespace:
         default=8,
         help="Run each eval split N times and aggregate (default: 8).",
     )
+    clean_group = parser.add_mutually_exclusive_group()
+    clean_group.add_argument(
+        "--clean-result",
+        dest="clean_result",
+        action="store_true",
+        default=True,
+        help="Clean previous default result/{dataset}/train artifacts before running (default).",
+    )
+    clean_group.add_argument(
+        "--no-clean-result",
+        dest="clean_result",
+        action="store_false",
+        help="Keep previous result artifacts.",
+    )
     return parser.parse_args()
 
 
@@ -111,6 +130,7 @@ async def main_async() -> int:
             account_id=args.account_id,
             user_id=args.user_id,
             output_path=args.output,
+            events_path=args.events_output,
             keep_default_tools=True,
             max_iterations=args.max_iterations,
             rollout_backend=args.rollout_backend,
@@ -120,6 +140,7 @@ async def main_async() -> int:
             baseline_eval_enabled=args.baseline_eval,
             eval_each_epoch=args.eval_each_epoch,
             trials=args.trials,
+            clean_result=args.clean_result,
         )
     )
     return 1 if any(epoch.get("errors") for epoch in report.train_epochs) else 0

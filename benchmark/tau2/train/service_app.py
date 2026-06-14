@@ -6,10 +6,16 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import os
 import sys
 from pathlib import Path
 from typing import Any
+
+import uvicorn
+
+DEFAULT_NATIVE_THREAD_WORKERS = 128
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
@@ -86,24 +92,53 @@ def parse_args() -> argparse.Namespace:
         default=os.getenv("TAU2_ROLLOUT_BACKEND", DEFAULT_TAU2_ROLLOUT_BACKEND),
         help="Rollout implementation backend (default: native).",
     )
+    parser.add_argument(
+        "--native-thread-workers",
+        type=int,
+        default=int(os.getenv("TAU2_NATIVE_THREAD_WORKERS", str(DEFAULT_NATIVE_THREAD_WORKERS))),
+        help="Default thread pool workers for native tau2 rollout execution (default: 128).",
+    )
     return parser.parse_args()
+
+
+class Tau2ServiceServer(uvicorn.Server):
+    def __init__(self, config: uvicorn.Config, *, native_thread_workers: int) -> None:
+        super().__init__(config)
+        self._native_thread_workers = native_thread_workers
+        self._default_executor: ThreadPoolExecutor | None = None
+
+    async def serve(self, sockets=None) -> None:
+        if self._native_thread_workers <= 0:
+            raise ValueError("native_thread_workers must be > 0")
+        loop = asyncio.get_running_loop()
+        self._default_executor = ThreadPoolExecutor(
+            max_workers=self._native_thread_workers,
+            thread_name_prefix="tau2-native",
+        )
+        loop.set_default_executor(self._default_executor)
+        try:
+            await super().serve(sockets=sockets)
+        finally:
+            self._default_executor.shutdown(wait=False, cancel_futures=True)
 
 
 def main() -> None:
     args = parse_args()
-    import uvicorn
 
-    uvicorn.run(
-        create_app(
-            data_root=args.data_root,
-            config_path=args.config,
-            rollout_language=args.rollout_language,
-            rollout_backend=args.rollout_backend,
-        ),
+    app = create_app(
+        data_root=args.data_root,
+        config_path=args.config,
+        rollout_language=args.rollout_language,
+        rollout_backend=args.rollout_backend,
+    )
+    config = uvicorn.Config(
+        app,
         host=args.host,
         port=args.port,
         access_log=False,
     )
+    server = Tau2ServiceServer(config, native_thread_workers=args.native_thread_workers)
+    server.run()
 
 
 if __name__ == "__main__":

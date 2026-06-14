@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -840,6 +841,67 @@ async def test_session_commit_policy_trainer_splits_large_message_batches():
     assert commit_result["error"] is None
     assert batch_sizes == [100, 100, 52]
     assert len(client.messages[commit_result["session_id"]]) == 252
+
+
+@pytest.mark.asyncio
+async def test_session_commit_policy_trainer_streams_commit_trace_events(tmp_path):
+    from openviking.session.train import JsonlEventRecorder, SessionCommitPolicyTrainer
+
+    client = FakeSessionCommitClient()
+    events_path = tmp_path / "events.jsonl"
+    trainer = SessionCommitPolicyTrainer(
+        client=client,
+        run_id="run1",
+        poll_interval_seconds=0.01,
+        event_recorder=JsonlEventRecorder(
+            events_path,
+            default_fields={"dataset": "unit", "domain": "booking", "run_id": "run1"},
+        ),
+    )
+    rollout = Rollout(
+        case=_case(),
+        messages=[Message(id="m1", role="user", parts=[TextPart(text="hello")])],
+        policy_snapshot_id="snapshot-1",
+        evaluation=RubricEvaluation(passed=True, score=1.0, criterion_results=[], feedback=[]),
+        metadata={"data_split": "unit", "task_no": 7, "execution_metadata": {"epoch": 3}},
+    )
+
+    result = await trainer.train_rollouts([rollout], _policy_set())
+
+    lines = [json.loads(line) for line in events_path.read_text().splitlines()]
+    assert [line["event"] for line in lines] == ["train_commit_submitted", "train_commit_done"]
+    commit_result = result.apply_result.metadata["commit_results"][0]
+    assert lines[0]["trace_id"] == commit_result["trace_id"]
+    assert lines[1]["trace_id"] == commit_result["trace_id"]
+    assert lines[1]["task_status"] == "completed"
+    assert lines[1]["session_id"] == commit_result["session_id"]
+    assert lines[1]["task_no"] == 7
+    assert lines[1]["dataset"] == "unit"
+
+
+@pytest.mark.asyncio
+async def test_jsonl_pipeline_event_hook_omits_full_commit_results(tmp_path):
+    from openviking.session.train import JsonlEventRecorder, JsonlPipelineEventHook
+
+    events_path = tmp_path / "pipeline.jsonl"
+    hook = JsonlPipelineEventHook(JsonlEventRecorder(events_path))
+    await hook.on_train_report(
+        report={
+            "epoch": 0,
+            "committed_rollout_count": 1,
+            "errors": [],
+            "commit_results": [
+                {"trace_id": "trace-1", "task_id": "task-1", "telemetry_id": "telemetry-1"}
+            ],
+        },
+        context=PipelineContext(execution_metadata={"epoch": 0, "training": True}),
+    )
+
+    data = json.loads(events_path.read_text())
+    assert data["event"] == "train_result"
+    assert data["commit_trace_ids"] == ["trace-1"]
+    assert data["commit_task_ids"] == ["task-1"]
+    assert "commit_results" not in data
 
 
 class DelayedSessionCommitClient(FakeSessionCommitClient):

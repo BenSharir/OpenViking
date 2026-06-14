@@ -101,7 +101,7 @@ class BatchPolicyTrainer:
 class StreamingPolicyTrainerConfig:
     """Configuration for automatic streaming rollout training."""
 
-    max_gradients_per_update: int = 8
+    max_gradients_per_update: int = 32
     max_wait_seconds: float = 10.0
     timer_check_interval_seconds: float = 1.0
     trace_console: bool = False

@@ -40,6 +40,7 @@ class SessionCommitPolicyTrainer:
     commit_concurrency: int = 20
     show_progress: bool = False
     progress_label: str = "session-commit"
+    event_recorder: Any | None = None
 
     def __post_init__(self) -> None:
         if not self.run_id:
@@ -149,6 +150,18 @@ class SessionCommitPolicyTrainer:
             archive_uri = str(commit_result.get("archive_uri") or "")
             trace_id = _commit_trace_id(commit_result)
             telemetry_id = _commit_telemetry_id(commit_result)
+            await self._record_event(
+                "train_commit_submitted",
+                rollout=rollout,
+                index=index,
+                session_id=session_id,
+                stage=stage,
+                task_id=task_id,
+                archive_uri=archive_uri,
+                trace_id=trace_id,
+                telemetry_id=telemetry_id,
+                score=_rollout_score(rollout),
+            )
             stage = "wait_task"
             task = await self._wait_task(task_id) if task_id else None
             task_error = _task_error(task)
@@ -159,6 +172,20 @@ class SessionCommitPolicyTrainer:
                     f"error={task_error}",
                     flush=True,
                 )
+            await self._record_event(
+                "train_commit_failed" if task_error else "train_commit_done",
+                rollout=rollout,
+                index=index,
+                session_id=session_id,
+                stage=stage,
+                task_id=task_id,
+                archive_uri=archive_uri,
+                trace_id=trace_id,
+                telemetry_id=telemetry_id,
+                task_status=task.get("status") if isinstance(task, dict) else None,
+                score=_rollout_score(rollout),
+                error=task_error,
+            )
             return {
                 "index": index,
                 "session_id": session_id,
@@ -177,6 +204,20 @@ class SessionCommitPolicyTrainer:
                 f"task_id=<none> trace_id=<none> error={exc}",
                 flush=True,
             )
+            await self._record_event(
+                "train_commit_failed",
+                rollout=rollout,
+                index=index,
+                session_id=session_id,
+                stage=stage,
+                task_id="",
+                archive_uri="",
+                trace_id=None,
+                telemetry_id=None,
+                task_status="failed",
+                score=_rollout_score(rollout),
+                error=str(exc),
+            )
             return {
                 "index": index,
                 "session_id": session_id,
@@ -189,6 +230,33 @@ class SessionCommitPolicyTrainer:
                 "score": _rollout_score(rollout),
                 "error": str(exc),
             }
+
+
+    async def _record_event(
+        self,
+        event: str,
+        *,
+        rollout: Rollout,
+        index: int,
+        session_id: str,
+        stage: str,
+        **fields: Any,
+    ) -> None:
+        if self.event_recorder is None:
+            return
+        record = getattr(self.event_recorder, "record", None)
+        if record is None:
+            return
+        payload = {
+            "index": index,
+            "stage": stage,
+            "session_id": session_id,
+            **_rollout_event_fields(rollout),
+            **fields,
+        }
+        result = record(event, **payload)
+        if asyncio.iscoroutine(result):
+            await result
 
     async def _batch_add_messages(self, session_id: str, messages: list[dict[str, Any]]) -> None:
         for chunk in _chunks(messages, _SESSION_BATCH_ADD_MESSAGE_LIMIT):
@@ -207,6 +275,37 @@ class SessionCommitPolicyTrainer:
             if deadline is not None and asyncio.get_running_loop().time() >= deadline:
                 return {"task_id": task_id, "status": "timeout", "error": "commit task timeout"}
             await asyncio.sleep(self.poll_interval_seconds)
+
+
+def _rollout_event_fields(rollout: Rollout) -> dict[str, Any]:
+    case = rollout.case
+    metadata = rollout.metadata or {}
+    execution_metadata = metadata.get("execution_metadata", {})
+    if not isinstance(execution_metadata, dict):
+        execution_metadata = {}
+    case_input = case.input or {}
+    return {
+        "epoch": execution_metadata.get("epoch"),
+        "training": execution_metadata.get("training"),
+        "rollout_stage": execution_metadata.get("rollout_stage")
+        or execution_metadata.get("stage"),
+        "case_name": case.name,
+        "task_signature": case.task_signature,
+        "split": (
+            case_input.get("data_split")
+            or metadata.get("data_split")
+            or case_input.get("split")
+            or metadata.get("split")
+        ),
+        "task_no": (
+            case_input.get("task_no")
+            if case_input.get("task_no") is not None
+            else metadata.get("task_no")
+        ),
+        "task_id": case_input.get("task_id") or metadata.get("task_id"),
+        "policy_snapshot_id": rollout.policy_snapshot_id,
+        "passed": bool(rollout.evaluation.passed) if rollout.evaluation is not None else None,
+    }
 
 
 def _chunks(items: list[dict[str, Any]], size: int) -> list[list[dict[str, Any]]]:

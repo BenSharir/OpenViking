@@ -8,6 +8,10 @@ from openviking.session.train.batch_runner import (
     run_batch_train_eval,
 )
 from openviking.session.train.components.dataset_service import create_dataset_service_app
+from openviking.session.train.components.event_recorder import (
+    JsonlEventRecorder,
+    JsonlPipelineEventHook,
+)
 from openviking.session.train.components.rollout_artifact_recorder import (
     RolloutArtifactIndex,
     RolloutArtifactRecorder,
@@ -108,6 +112,8 @@ __all__ = [
     "BatchTrainEvalConfig",
     "RolloutArtifactIndex",
     "RolloutArtifactRecorder",
+    "JsonlEventRecorder",
+    "JsonlPipelineEventHook",
     "make_streaming_policy_trainer_key",
     "get_streaming_policy_trainer",
     "StreamingPolicyTrainerKey",

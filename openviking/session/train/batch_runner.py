@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -11,6 +12,10 @@ from typing import Any
 
 from openviking.server.config import load_server_config
 from openviking.server.identity import AuthMode
+from openviking.session.train.components.event_recorder import (
+    JsonlEventRecorder,
+    JsonlPipelineEventHook,
+)
 from openviking.session.train.components.rollout_artifact_recorder import RolloutArtifactRecorder
 from openviking.session.train.components.remote import RemoteCaseLoader, RemoteRolloutExecutor
 from openviking.session.train.components.report_builder import PipelineReportBuilder
@@ -58,6 +63,8 @@ class BatchTrainEvalConfig:
     baseline_eval_enabled: bool = False
     eval_each_epoch: bool = False
     trials: int = 8
+    clean_result: bool = True
+    events_path: str | None = None
     run_timestamp: str = field(default_factory=lambda: datetime.now().strftime("%Y%m%d_%H%M%S"))
 
     def __post_init__(self) -> None:
@@ -119,6 +126,8 @@ class BatchTrainEvalReport:
     rollouts_root: str | None = None
     rollouts_index_path: str | None = None
     latest_failed_rollout: str | None = None
+    clean_result: bool = True
+    events_path: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -146,6 +155,8 @@ class BatchTrainEvalReport:
             "rollouts_root": self.rollouts_root,
             "rollouts_index_path": self.rollouts_index_path,
             "latest_failed_rollout": self.latest_failed_rollout,
+            "clean_result": self.clean_result,
+            "events_path": self.events_path,
         }
 
 
@@ -154,6 +165,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
     """Run baseline eval, commit-based train epochs, and final eval for one dataset/domain."""
 
     _configure_openviking_config(config.config_path)
+    _clean_result_dir(config)
     client = _build_http_client(config)
     await client.initialize()
     try:
@@ -163,6 +175,27 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             policies=[],
             metadata=_policy_set_metadata(config, client),
         )
+        run_dir = _run_output_dir(config)
+        event_recorder = JsonlEventRecorder(
+            path=_events_path(config),
+            default_fields={
+                "dataset": config.dataset,
+                "domain": config.domain,
+                "run_timestamp": config.run_timestamp,
+            },
+        )
+        await event_recorder.record(
+            "run_start",
+            stage="run_start",
+            epochs=config.epochs,
+            concurrency=config.concurrency,
+            commit_concurrency=config.commit_concurrency,
+            train_limit=config.train_limit,
+            eval_limit=config.eval_limit,
+            trials=config.trials,
+            rollout_backend=config.rollout_backend,
+            clean_result=config.clean_result,
+        )
         policy_trainer = SessionCommitPolicyTrainer(
             client=client,
             keep_recent_count=config.commit_keep_recent_count,
@@ -171,9 +204,10 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             commit_concurrency=config.commit_concurrency,
             show_progress=True,
             progress_label="train",
+            event_recorder=event_recorder,
         )
+        event_recorder.default_fields["run_id"] = policy_trainer.run_id
         pipeline = _build_pipeline(config, policy_trainer)
-        run_dir = _run_output_dir(config)
         rollout_artifact_recorder = RolloutArtifactRecorder(
             run_dir=run_dir,
             client=client,
@@ -198,6 +232,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
                     eval_trials=config.trials,
                     trial_index_key="eval_trial",
                     report_builder=report_builder,
+                    event_recorder=event_recorder,
                 ),
             )
             rollout_artifact_recorder.record_eval(
@@ -219,6 +254,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             eval_trials=config.trials,
             trial_index_key="eval_trial",
             report_builder=report_builder,
+            event_recorder=event_recorder,
         )
         train_result = await pipeline.train(
             case_loader=train_loader,
@@ -254,6 +290,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
                     eval_trials=config.trials,
                     trial_index_key="eval_trial",
                     report_builder=report_builder,
+                    event_recorder=event_recorder,
                 ),
             )
             rollout_artifact_recorder.record_eval(
@@ -290,8 +327,20 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             rollouts_root=rollout_artifact_index.rollouts_root,
             rollouts_index_path=str(run_dir / "rollouts_index.json"),
             latest_failed_rollout=rollout_artifact_index.latest_failed_rollout,
+            clean_result=config.clean_result,
+            events_path=str(_events_path(config)),
         )
         _write_report(report, config)
+        await event_recorder.record(
+            "run_result",
+            stage="run_result",
+            trace_id=report.trace_id,
+            output_path=report.output_path,
+            rollouts_root=report.rollouts_root,
+            rollouts_index_path=report.rollouts_index_path,
+            latest_failed_rollout=report.latest_failed_rollout,
+            accuracy_delta=report.accuracy_delta,
+        )
         await emit_run_summary(
             train_context,
             title="batch train/eval",
@@ -401,12 +450,23 @@ def _pipeline_context(
     eval_trials: int = 1,
     trial_index_key: str = "trial",
     report_builder: Any = None,
+    event_recorder: JsonlEventRecorder | None = None,
 ) -> PipelineContext:
     execution_metadata = {"epoch": epoch, "training": training}
     if rollout_stage is not None:
         execution_metadata["rollout_stage"] = rollout_stage
     if eval_split is not None:
         execution_metadata["eval_split"] = eval_split
+    hooks = None
+    if event_recorder is not None:
+        from openviking.session.train.components.report_builder import PipelineReportHook
+        from openviking.session.train.components.reporter import ConsolePipelineReporter
+
+        hooks = [
+            PipelineReportHook(),
+            JsonlPipelineEventHook(event_recorder),
+            ConsolePipelineReporter(),
+        ]
     return PipelineContext(
         analysis_context={"epoch": epoch},
         execution_metadata=execution_metadata,
@@ -415,6 +475,7 @@ def _pipeline_context(
         eval_trials=eval_trials,
         trial_index_key=trial_index_key,
         report_builder=report_builder,
+        **({"lifecycle_hooks": hooks} if hooks is not None else {}),
     )
 
 
@@ -468,23 +529,47 @@ def _write_report(report: BatchTrainEvalReport, config: BatchTrainEvalConfig) ->
     report.output_path = str(output_path)
 
 
+def _events_path(config: BatchTrainEvalConfig) -> Path:
+    if config.events_path:
+        return Path(config.events_path).expanduser()
+    return _run_output_dir(config) / "events.jsonl"
+
+
 def _default_output_path(config: BatchTrainEvalConfig) -> str:
     if config.output_path:
         return str(Path(config.output_path).expanduser())
     return str(_run_output_dir(config) / "report.json")
 
 
+def _clean_result_dir(config: BatchTrainEvalConfig) -> None:
+    if not config.clean_result:
+        return
+    if config.output_path:
+        output_path = Path(config.output_path).expanduser()
+        if output_path.exists() and output_path.is_file():
+            output_path.unlink()
+        return
+
+    result_dir = _result_base_dir(config)
+    if result_dir.exists():
+        for child in result_dir.iterdir():
+            if child.is_symlink() or child.is_file():
+                child.unlink()
+            elif child.is_dir():
+                shutil.rmtree(child)
+    result_dir.mkdir(parents=True, exist_ok=True)
+    print(f"[batch-train-eval] clean_result=1 path={result_dir}", flush=True)
+
+
 def _run_output_dir(config: BatchTrainEvalConfig) -> Path:
     if config.output_path:
         output_path = Path(config.output_path).expanduser()
         return output_path.parent
-    return (
-        _repo_root()
-        / "result"
-        / config.dataset
-        / "train"
-        / f"{config.domain}_{config.run_timestamp}"
-    )
+    return _result_base_dir(config) / f"{config.domain}_{config.run_timestamp}"
+
+
+def _result_base_dir(config: BatchTrainEvalConfig) -> Path:
+    return _repo_root() / "result" / config.dataset / "train"
 
 
 def _latest_rollouts_path(config: BatchTrainEvalConfig) -> Path:
