@@ -9,10 +9,14 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from openviking.session.memory.dataclass import MemoryFile, StoredLink
-from openviking.session.memory.memory_updater import write_stored_links
-from openviking.session.memory.merge_op.link_merge import merge_links
-from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking.session.memory.dataclass import (
+    MemoryFile,
+    ResolvedOperation,
+    ResolvedOperations,
+    StoredLink,
+)
+from openviking.session.memory.memory_type_registry import create_default_registry
+from openviking.session.memory.memory_updater import MemoryUpdater
 from openviking.session.train.domain import (
     Experience,
     ExperienceSet,
@@ -73,6 +77,7 @@ class MemoryFilePolicyUpdater:
     """
 
     viking_fs: Any = None
+    vikingdb: Any = None
 
     @tracer("train.policy_updater.memory_file.apply", ignore_result=True, ignore_args=True)
     async def apply(
@@ -86,84 +91,33 @@ class MemoryFilePolicyUpdater:
             raise RuntimeError("VikingFS is required to apply policy update plans")
 
         updated_policy_set = _apply_items_to_snapshot(plan.items, policy_set)
-        written_uris: list[str] = []
-        deleted_uris: list[str] = []
-        errors: list[str] = []
+        operations, preflight_errors = _plan_to_resolved_operations(
+            plan=plan,
+            policy_set=policy_set,
+            updated_policy_set=updated_policy_set,
+        )
+        updater = MemoryUpdater(registry=create_default_registry(), vikingdb=self.vikingdb)
+        updater._viking_fs = viking_fs
 
-        for item in plan.items:
-            uri = _target_uri(item, policy_set.root_uri)
-            current = _find_policy(policy_set, uri=uri, name=item.target_experience_name)
-            if (
-                current is not None
-                and item.before_content is not None
-                and _normalize_guard_content(current.content)
-                != _normalize_guard_content(item.before_content)
-            ):
-                errors.append(
-                    "base content mismatch for "
-                    f"{item.target_experience_name}: expected gradient before_content"
-                )
-                continue
-
-            if item.kind == "delete_experience":
-                try:
-                    await viking_fs.rm(uri, ctx=context)
-                    deleted_uris.append(uri)
-                except Exception as exc:  # pragma: no cover - defensive component boundary
-                    errors.append(f"failed to delete {uri}: {exc}")
-                continue
-
-            if item.kind != "upsert_experience":
-                continue
-            if item.after_content is None:
-                errors.append(f"missing after_content for {item.target_experience_name}")
-                continue
-
-            updated = _find_policy(updated_policy_set, uri=uri, name=item.target_experience_name)
-            if updated is None:
-                errors.append(
-                    f"planned policy not found after simulation: {item.target_experience_name}"
-                )
-                continue
-            links = _experience_source_trajectory_links(
-                exp_uri=uri,
-                existing=current,
-                links=item.links,
-            )
-            updated.links = links
-            raw = MemoryFileUtils.write(
-                MemoryFile(
-                    uri=uri,
-                    content=updated.content,
-                    links=links,
-                    memory_type="experiences",
-                    extra_fields={
-                        **dict(updated.metadata),
-                        "memory_type": "experiences",
-                        "experience_name": updated.name,
-                        "version": updated.version,
-                        "status": updated.status,
-                    },
-                )
-            )
-            try:
-                await viking_fs.write_file(uri, raw, ctx=context)
-                await _write_source_trajectory_backlinks(
-                    exp_uri=uri,
-                    links=item.links,
-                    viking_fs=viking_fs,
-                    ctx=context,
-                )
-                written_uris.append(uri)
-            except Exception as exc:  # pragma: no cover - defensive component boundary
-                errors.append(f"failed to write {uri}: {exc}")
+        apply_result = await updater.apply_operations(
+            operations,
+            context,
+            extract_context=None,
+            isolation_handler=None,
+        )
+        errors = [*preflight_errors, *[f"{uri}: {exc}" for uri, exc in apply_result.errors]]
 
         return PolicyApplyResult(
-            updated_policy_set=updated_policy_set,
-            written_uris=written_uris,
-            deleted_uris=deleted_uris,
+            updated_policy_set=updated_policy_set if not errors else policy_set,
+            written_uris=list(apply_result.written_uris + apply_result.edited_uris),
+            deleted_uris=list(apply_result.deleted_uris),
             errors=errors,
-            metadata={"dry_run": False, "item_count": len(plan.items)},
+            metadata={
+                "dry_run": False,
+                "item_count": len(plan.items),
+                "operation_upsert_count": len(operations.upsert_operations),
+                "operation_delete_count": len(operations.delete_file_contents),
+            },
         )
 
 
@@ -262,34 +216,116 @@ def _target_uri(item: PolicyPlanItem, root_uri: str) -> str:
     return f"{root_uri.rstrip('/')}/{_safe_experience_filename(item.target_experience_name)}.md"
 
 
-def _experience_source_trajectory_links(
+
+def _plan_to_resolved_operations(
     *,
-    exp_uri: str,
-    existing: Experience | None,
-    links: list[StoredLink],
-) -> list[dict[str, Any]]:
-    """Return v2-compatible exp→traj derived_from links for an experience write."""
+    plan: PolicyUpdatePlan,
+    policy_set: ExperienceSet,
+    updated_policy_set: ExperienceSet,
+) -> tuple[ResolvedOperations, list[str]]:
+    upserts: list[ResolvedOperation] = []
+    deletes: list[MemoryFile] = []
+    links: list[StoredLink] = []
+    errors: list[str] = []
 
-    existing_links = list(existing.links or []) if existing else []
-    source_links = _source_trajectory_links(exp_uri=exp_uri, links=links)
-    if not source_links:
-        return existing_links
-    return merge_links(existing_links, [link.model_dump() for link in source_links])
+    for item in plan.items:
+        uri = _target_uri(item, policy_set.root_uri)
+        current = _find_policy(policy_set, uri=uri, name=item.target_experience_name)
+        if (
+            current is not None
+            and item.before_content is not None
+            and _normalize_guard_content(current.content)
+            != _normalize_guard_content(item.before_content)
+        ):
+            errors.append(
+                "base content mismatch for "
+                f"{item.target_experience_name}: expected gradient before_content"
+            )
+            continue
+
+        if item.kind == "delete_experience":
+            deletes.append(_policy_or_plan_item_memory_file(item, uri=uri, current=current))
+            continue
+
+        if item.kind != "upsert_experience":
+            continue
+        if item.after_content is None:
+            errors.append(f"missing after_content for {item.target_experience_name}")
+            continue
+
+        updated = _find_policy(updated_policy_set, uri=uri, name=item.target_experience_name)
+        if updated is None:
+            errors.append(
+                f"planned policy not found after simulation: {item.target_experience_name}"
+            )
+            continue
+
+        upserts.append(
+            ResolvedOperation(
+                old_memory_file_content=_experience_to_memory_file(current)
+                if current is not None
+                else None,
+                memory_fields={
+                    **dict(updated.metadata),
+                    "memory_type": "experiences",
+                    "experience_name": updated.name,
+                    "content": updated.content,
+                    "status": updated.status,
+                },
+                memory_type="experiences",
+                uris=[uri],
+            )
+        )
+        links.extend(_source_trajectory_links(exp_uri=uri, links=item.links))
+
+    return (
+        ResolvedOperations(
+            upsert_operations=upserts,
+            delete_file_contents=deletes,
+            errors=[],
+            resolved_links=links,
+        ),
+        errors,
+    )
 
 
-async def _write_source_trajectory_backlinks(
+def _policy_or_plan_item_memory_file(
+    item: PolicyPlanItem,
     *,
-    exp_uri: str,
-    links: list[StoredLink],
-    viking_fs: Any,
-    ctx: Any,
-) -> None:
-    """Write the trajectory-side backlink for v2-compatible exp→traj links."""
+    uri: str,
+    current: Experience | None,
+) -> MemoryFile:
+    if current is not None:
+        return _experience_to_memory_file(current)
+    return MemoryFile(
+        uri=uri,
+        content=item.before_content or "",
+        memory_type="experiences",
+        extra_fields={
+            "memory_type": "experiences",
+            "experience_name": item.target_experience_name,
+            **({"version": item.base_version} if item.base_version is not None else {}),
+        },
+    )
 
-    source_links = _source_trajectory_links(exp_uri=exp_uri, links=links)
-    if not source_links:
-        return
-    await write_stored_links(source_links, ctx, viking_fs, skip_uris={exp_uri})
+
+def _experience_to_memory_file(experience: Experience | None) -> MemoryFile | None:
+    if experience is None:
+        return None
+    return MemoryFile(
+        uri=experience.uri,
+        content=experience.content,
+        links=list(experience.links or []),
+        backlinks=list(experience.backlinks or []),
+        memory_type="experiences",
+        extra_fields={
+            **dict(experience.metadata),
+            "memory_type": "experiences",
+            "experience_name": experience.name,
+            "version": experience.version,
+            "status": experience.status,
+        },
+    )
 
 
 def _source_trajectory_links(
@@ -299,7 +335,6 @@ def _source_trajectory_links(
 ) -> list[StoredLink]:
     result: list[StoredLink] = []
     seen: set[tuple[str, str | None]] = set()
-    now = datetime.now(timezone.utc).isoformat()
     for link in links or []:
         if (
             link.link_type != "derived_from"
@@ -313,7 +348,7 @@ def _source_trajectory_links(
         seen.add(key)
         update = {"from_uri": exp_uri}
         if not link.created_at:
-            update["created_at"] = now
+            update["created_at"] = datetime.now(timezone.utc).isoformat()
         result.append(link.model_copy(update=update))
     return result
 

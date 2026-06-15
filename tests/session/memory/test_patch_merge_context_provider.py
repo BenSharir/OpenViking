@@ -66,15 +66,17 @@ async def test_patch_merge_context_provider_prefetch_reads_originals_and_renders
     assert read_message["result"]["experience_name"] == "booking"
     assert messages[1]["role"] == "user"
     assert messages[1]["content"].startswith("# Memory File Patches")
-    assert "## Memory Patch 1" in messages[1]["content"]
-    assert "target_uri: viking://user/u/memories/experiences/booking.md" in messages[1]["content"]
-    assert "### Field Diff: content" in messages[1]["content"]
-    assert "--- content.before" in messages[1]["content"]
-    assert "+++ content.after" in messages[1]["content"]
-    assert "-old line" in messages[1]["content"]
-    assert "+new line" in messages[1]["content"]
-    assert " keep line" not in messages[1]["content"]
-    assert "### Field Diff: status" not in messages[1]["content"]
+    assert "Patch 1" in messages[1]["content"]
+    # Patch headers should not include target_uri/target_name/memory_type
+    assert "target_uri:" not in messages[1]["content"]
+    assert "target_name:" not in messages[1]["content"]
+    assert "  content:" in messages[1]["content"]
+    assert "--- content.before" not in messages[1]["content"]
+    assert "+++ content.after" not in messages[1]["content"]
+    assert "    -old line" in messages[1]["content"]
+    assert "    +new line" in messages[1]["content"]
+    assert "     keep line" in messages[1]["content"]  # n=1 context line
+    assert "  status:" not in messages[1]["content"]
 
 
 @pytest.mark.asyncio
@@ -224,9 +226,11 @@ async def test_patch_merge_context_provider_renders_compact_patch_metadata():
     messages = await provider.prefetch()
     content = messages[0]["content"]
 
-    assert 'metadata: {"base_version": 3' in content
-    assert '"rationale": "useful reason"' in content
-    assert '"trajectory_outcome": "success"' in content
+    assert 'meta: {"confidence": 0.9}' in content
+    assert "base_version" not in content
+    assert "rationale" not in content
+    assert "trajectory_outcome" not in content
+    assert "gradient_metadata" not in content
     assert "links" not in content
     assert "memory_fields" not in content
     assert "duplicated" not in content
@@ -248,11 +252,15 @@ async def test_patch_merge_context_provider_renders_create_patch_from_dev_null()
     messages = await provider.prefetch()
 
     assert len(messages) == 1
-    assert "target_name: new_booking" in messages[0]["content"]
-    assert "### Field Diff: content" in messages[0]["content"]
-    assert "--- content.before" in messages[0]["content"]
-    assert "+++ content.after" in messages[0]["content"]
-    assert "+created line" in messages[0]["content"]
+    assert "Patch 1" in messages[0]["content"]
+    # Patch headers should not include target_name/target_uri/memory_type
+    assert "target_name:" not in messages[0]["content"]
+    assert "target_uri:" not in messages[0]["content"]
+    # Field diffs may include memory_type field changes (that's expected)
+    assert "  content:" in messages[0]["content"]
+    assert "--- content.before" not in messages[0]["content"]
+    assert "+++ content.after" not in messages[0]["content"]
+    assert "    +created line" in messages[0]["content"]
 
 
 def test_patch_merge_context_provider_get_memory_schema_single_type(monkeypatch):

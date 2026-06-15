@@ -692,7 +692,6 @@ async def test_streaming_policy_trainer_splits_flush_by_gradient_count():
     assert result.metadata["gradient_count"] == 5
     assert result.metadata["chunk_count"] == 2
     assert result.metadata["chunk_gradient_counts"] == [3, 2]
-    assert result.metadata["chunk_target_counts"] == [1, 1]
     assert result.plan.metadata["chunk_item_counts"] == [0, 0]
     assert result.apply_result.metadata["chunk_count"] == 2
     assert result.apply_result.updated_policy_set.policies[0].version == 3
@@ -701,7 +700,8 @@ async def test_streaming_policy_trainer_splits_flush_by_gradient_count():
 
 
 @pytest.mark.asyncio
-async def test_streaming_policy_trainer_splits_different_target_gradient_groups():
+async def test_streaming_policy_trainer_chunks_multiple_target_gradients_by_count():
+    """Gradients from different targets share the same chunk pool — split only by count."""
     from openviking.session.train import StreamingPolicyTrainer, StreamingPolicyTrainerConfig
 
     class MultiTargetEstimator:
@@ -758,13 +758,16 @@ async def test_streaming_policy_trainer_splits_different_target_gradient_groups(
 
     result = await trainer.submit_rollout(rollout)
 
+    # gradients are chunked purely by count, target boundaries don't affect chunking
     assert optimizer.gradient_counts == [3, 2]
     assert result.metadata["chunk_gradient_counts"] == [3, 2]
+    assert "chunk_target_counts" not in result.metadata
     assert await trainer.close() is None
 
 
 @pytest.mark.asyncio
-async def test_streaming_policy_trainer_keeps_categories_separate_when_chunking():
+async def test_streaming_policy_trainer_mixes_categories_in_chunks():
+    """All gradients share the same chunk pool regardless of training_category."""
     from openviking.session.train import StreamingPolicyTrainer, StreamingPolicyTrainerConfig
 
     class CategorizedEstimator:
@@ -818,10 +821,14 @@ async def test_streaming_policy_trainer_keeps_categories_separate_when_chunking(
 
     result = await trainer.submit_rollout(rollout)
 
-    assert optimizer.gradient_counts == [2, 2]
-    assert optimizer.categories == [["category_a", "category_a"], ["category_b", "category_b"]]
-    assert result.metadata["chunk_gradient_counts"] == [2, 2]
-    assert result.metadata["chunk_categories"] == [["category_a"], ["category_b"]]
+    # categories are no longer kept separate — all gradients chunked purely by count
+    assert optimizer.gradient_counts == [3, 1]
+    assert optimizer.categories == [
+        ["category_a", "category_a", "category_b"],
+        ["category_b"],
+    ]
+    assert result.metadata["chunk_gradient_counts"] == [3, 1]
+    assert "chunk_categories" not in result.metadata
     assert await trainer.close() is None
 
 

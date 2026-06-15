@@ -265,12 +265,7 @@ class StreamingPolicyTrainer:
             items,
             self.config.max_gradients_per_update,
         )
-        gradients = [
-            gradient
-            for chunk in chunks
-            for chunk_item in chunk.items
-            for gradient in chunk_item.gradients
-        ]
+        gradients = [gradient for chunk in chunks for gradient in chunk.gradients]
         analyses = _unique_by_identity([item.analysis for item in items])
         rollouts = _unique_by_identity([item.rollout for item in items])
         tracer.info(
@@ -315,8 +310,6 @@ class StreamingPolicyTrainer:
         self.policy_set = apply_result.updated_policy_set
         self._last_apply_result = apply_result
         chunk_gradient_counts = [len(chunk.gradients) for chunk in chunks]
-        chunk_categories = [list(chunk.categories) for chunk in chunks]
-        chunk_target_counts = [len(chunk.target_keys) for chunk in chunks]
         result = RolloutTrainingResult(
             analyses=analyses,
             gradients=gradients,
@@ -329,8 +322,6 @@ class StreamingPolicyTrainer:
                 "gradient_count": len(gradients),
                 "chunk_count": len(chunk_gradient_counts),
                 "chunk_gradient_counts": chunk_gradient_counts,
-                "chunk_categories": chunk_categories,
-                "chunk_target_counts": chunk_target_counts,
                 "score": _average_score(analyses),
                 "source": "streaming_rollouts",
                 "flush_reason": reason,
@@ -354,152 +345,18 @@ def _chunks_buffered_items_by_gradient_count(
     if size <= 0:
         raise ValueError("chunk size must be > 0")
 
-    category_groups = _category_groups_preserving_order(items)
+    all_gradients: list[SemanticGradient] = []
+    for item in items:
+        all_gradients.extend(item.gradients)
+
+    if not all_gradients:
+        return [_BufferedRolloutTrainingChunk(gradients=[])]
+
     chunks: list[_BufferedRolloutTrainingChunk] = []
-    for category_group in category_groups:
-        if not category_group.gradients:
-            chunks.append(
-                _BufferedRolloutTrainingChunk(
-                    items=[
-                        _BufferedRolloutTraining(
-                            gradients=[],
-                            analysis=category_group.analysis,
-                            rollout=category_group.rollout,
-                        )
-                    ],
-                    gradients=[],
-                    categories=(category_group.category,),
-                    target_keys=(),
-                )
-            )
-            continue
-
-        current_items: list[_BufferedRolloutTraining] = []
-        current_gradients: list[SemanticGradient] = []
-        current_target_keys: list[Hashable] = []
-
-        def flush_current() -> None:
-            nonlocal current_items, current_gradients, current_target_keys
-            if not current_gradients:
-                return
-            chunks.append(
-                _BufferedRolloutTrainingChunk(
-                    items=current_items,
-                    gradients=current_gradients,
-                    categories=(category_group.category,),
-                    target_keys=tuple(current_target_keys),
-                )
-            )
-            current_items = []
-            current_gradients = []
-            current_target_keys = []
-
-        for target_group in _target_groups_preserving_order(category_group):
-            for target_slice in _split_gradients(target_group.gradients, size):
-                if len(current_gradients) + len(target_slice) > size:
-                    flush_current()
-                current_items.append(
-                    _BufferedRolloutTraining(
-                        gradients=target_slice,
-                        analysis=target_group.analysis,
-                        rollout=target_group.rollout,
-                    )
-                )
-                current_gradients.extend(target_slice)
-                if target_group.target_key not in current_target_keys:
-                    current_target_keys.append(target_group.target_key)
-                if len(current_gradients) >= size:
-                    flush_current()
-        flush_current()
-
+    for start in range(0, len(all_gradients), size):
+        chunk_gradients = all_gradients[start : start + size]
+        chunks.append(_BufferedRolloutTrainingChunk(gradients=chunk_gradients))
     return chunks
-
-
-def _category_groups_preserving_order(
-    items: list["_BufferedRolloutTraining"],
-) -> list["_BufferedCategoryGroup"]:
-    groups: list[_BufferedCategoryGroup] = []
-    group_index: dict[Hashable, int] = {}
-    for item_index, item in enumerate(items):
-        if not item.gradients:
-            groups.append(
-                _BufferedCategoryGroup(
-                    category=("__empty__", item_index),
-                    gradients=[],
-                    analysis=item.analysis,
-                    rollout=item.rollout,
-                )
-            )
-            continue
-        for gradient in item.gradients:
-            category = _gradient_training_category(gradient)
-            existing_index = group_index.get(category)
-            if existing_index is None:
-                group_index[category] = len(groups)
-                groups.append(
-                    _BufferedCategoryGroup(
-                        category=category,
-                        gradients=[gradient],
-                        analysis=item.analysis,
-                        rollout=item.rollout,
-                    )
-                )
-            else:
-                groups[existing_index].gradients.append(gradient)
-    return groups
-
-
-def _target_groups_preserving_order(
-    category_group: "_BufferedCategoryGroup",
-) -> list["_BufferedTargetGroup"]:
-    groups: list[_BufferedTargetGroup] = []
-    group_index: dict[Hashable, int] = {}
-    for gradient in category_group.gradients:
-        key = _gradient_target_key(gradient)
-        existing_index = group_index.get(key)
-        if existing_index is None:
-            group_index[key] = len(groups)
-            groups.append(
-                _BufferedTargetGroup(
-                    target_key=key,
-                    gradients=[gradient],
-                    analysis=category_group.analysis,
-                    rollout=category_group.rollout,
-                )
-            )
-        else:
-            groups[existing_index].gradients.append(gradient)
-    return groups
-
-
-def _split_gradients(
-    gradients: list[SemanticGradient],
-    size: int,
-) -> list[list[SemanticGradient]]:
-    return [gradients[index : index + size] for index in range(0, len(gradients), size)]
-
-
-def _gradient_training_category(gradient: SemanticGradient) -> Hashable:
-    metadata = getattr(gradient, "metadata", None) or {}
-    for key in ("training_category", "category"):
-        value = metadata.get(key)
-        if value:
-            return str(value)
-    return ("__uncategorized__",)
-
-
-def _gradient_target_key(gradient: SemanticGradient) -> Hashable:
-    uri = getattr(gradient, "target_experience_uri", None)
-    if uri:
-        return ("uri", str(uri))
-    name = getattr(gradient, "target_experience_name", None)
-    if name:
-        return ("name", str(name))
-    after_file = getattr(gradient, "after_file", None)
-    after_uri = getattr(after_file, "uri", None)
-    if after_uri:
-        return ("uri", str(after_uri))
-    return ("gradient", id(gradient))
 
 
 def _combine_update_plans(plans: list[PolicyUpdatePlan]) -> PolicyUpdatePlan:
@@ -544,26 +401,7 @@ class _BufferedRolloutTraining:
 
 @dataclass(slots=True)
 class _BufferedRolloutTrainingChunk:
-    items: list[_BufferedRolloutTraining]
     gradients: list[SemanticGradient]
-    categories: tuple[Hashable, ...]
-    target_keys: tuple[Hashable, ...]
-
-
-@dataclass(slots=True)
-class _BufferedCategoryGroup:
-    category: Hashable
-    gradients: list[SemanticGradient]
-    analysis: RolloutAnalysis
-    rollout: Rollout
-
-
-@dataclass(slots=True)
-class _BufferedTargetGroup:
-    target_key: Hashable
-    gradients: list[SemanticGradient]
-    analysis: RolloutAnalysis
-    rollout: Rollout
 
 
 _streaming_policy_trainer_registry: dict[Hashable, StreamingPolicyTrainer] = {}

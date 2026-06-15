@@ -17,14 +17,7 @@ from openviking.session.memory.utils.language import resolve_output_language_fro
 
 _SYSTEM_HIDDEN_FIELDS = {"source_extraction_id", "source_extraction_ids"}
 _MAX_EXTRA_CANDIDATE_FILES = 10
-_PATCH_METADATA_KEYS = ("base_version", "rationale", "confidence")
-_PATCH_GRADIENT_METADATA_KEYS = (
-    "trajectory_outcome",
-    "rubric_passed",
-    "training_category",
-    "category",
-    "supersedes",
-)
+_PATCH_METADATA_KEYS = ("confidence",)
 
 
 @dataclass(slots=True)
@@ -230,31 +223,22 @@ def _render_field_diff_patches(patches: list[PatchMergePatch]) -> str:
 
 
 def _render_one_field_diff_patch(index: int, patch: PatchMergePatch) -> str:
-    lines = [
-        f"## Memory Patch {index}",
-        "",
-        f"target_uri: {patch.target_uri or ''}",
-        f"memory_type: {patch.memory_type}",
-        f"target_name: {patch.target_name}",
-    ]
+    lines = [f"Patch {index}"]
     if patch.metadata:
         compact_metadata = _compact_patch_metadata(patch.metadata)
         if compact_metadata:
-            lines.append(f"metadata: {_compact_value(compact_metadata)}")
+            lines.append(f"  meta: {_compact_value(compact_metadata)}")
     field_diffs = _field_diffs(patch.before_file, patch.after_file)
     if not field_diffs:
-        lines.extend(["", "No changed fields."])
+        lines.append("  (no changes)")
         return "\n".join(lines)
     for field_name, diff in field_diffs:
-        lines.extend(
-            [
-                "",
-                f"### Field Diff: {field_name}",
-                "```diff",
-                diff.rstrip(),
-                "```",
-            ]
-        )
+        lines.append(f"  {field_name}:")
+        # Strip unified diff headers (---, +++) but keep @@ hunk markers and content
+        for diff_line in diff.splitlines():
+            if diff_line.startswith("---") or diff_line.startswith("+++"):
+                continue
+            lines.append(f"    {diff_line}")
     return "\n".join(lines)
 
 
@@ -300,7 +284,7 @@ def _value_unified_diff(*, field_name: str, before_value: Any, after_value: Any)
         after_lines,
         fromfile=f"{field_name}.before",
         tofile=f"{field_name}.after",
-        n=0,
+        n=1,
         lineterm="",
     )
     return "\n".join(diff_lines)
@@ -349,22 +333,6 @@ def _compact_patch_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         for key in _PATCH_METADATA_KEYS
         if key in cleaned and _metadata_value_is_useful(cleaned[key])
     }
-
-    gradient_metadata = cleaned.get("gradient_metadata")
-    if isinstance(gradient_metadata, dict):
-        compact_gradient_metadata = {
-            key: gradient_metadata[key]
-            for key in _PATCH_GRADIENT_METADATA_KEYS
-            if key in gradient_metadata and _metadata_value_is_useful(gradient_metadata[key])
-        }
-        if compact_gradient_metadata:
-            result["gradient_metadata"] = compact_gradient_metadata
-
-    # Some callers may place these signals at the top level instead of under
-    # gradient_metadata.
-    for key in _PATCH_GRADIENT_METADATA_KEYS:
-        if key in cleaned and key not in result and _metadata_value_is_useful(cleaned[key]):
-            result[key] = cleaned[key]
 
     return result
 

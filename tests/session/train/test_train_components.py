@@ -28,7 +28,8 @@ class FakeVikingFS:
     def __init__(self, files: dict[str, str]):
         self.files = files
 
-    async def ls(self, uri: str, output: str = "original", ctx=None):
+    async def ls(self, uri: str, output: str = "original", ctx=None, **kwargs):
+        del kwargs
         assert output == "original"
         prefix = uri.rstrip("/") + "/"
         return [
@@ -51,6 +52,15 @@ class FakeVikingFS:
         del recursive, ctx, lock_handle
         self.files.pop(uri, None)
         return {"estimated_deleted_count": 1}
+
+
+class FakeVikingDB:
+    def __init__(self):
+        self.embedding_messages = []
+
+    async def enqueue_embedding_msg(self, embedding_msg):
+        self.embedding_messages.append(embedding_msg)
+        return True
 
 
 def _experience_set() -> ExperienceSet:
@@ -277,7 +287,11 @@ async def test_memory_file_policy_updater_writes_experience_files():
     gradient = _patch_gradient(uri=policy_set.policies[0].uri, before="content", after="new content")
     plan = _plan_from_gradient(gradient)
 
-    result = await MemoryFilePolicyUpdater(viking_fs=fs).apply(plan, policy_set)
+    result = await MemoryFilePolicyUpdater(viking_fs=fs).apply(
+        plan,
+        policy_set,
+        fake_request_context(),
+    )
 
     assert result.errors == []
     assert result.written_uris == [policy_set.policies[0].uri]
@@ -286,6 +300,32 @@ async def test_memory_file_policy_updater_writes_experience_files():
     assert '"memory_type": "experiences"' in written
     assert '"experience_name": "booking_duplicate_handling"' in written
     assert '"version": 2' in written
+
+
+@pytest.mark.asyncio
+async def test_memory_file_policy_updater_vectorizes_written_experience_files():
+    policy_set = _experience_set()
+    fs = FakeVikingFS({})
+    vikingdb = FakeVikingDB()
+    gradient = _patch_gradient(uri=policy_set.policies[0].uri, before="content", after="new content")
+    plan = _plan_from_gradient(gradient)
+
+    from openviking.server.identity import RequestContext, Role
+    from openviking_cli.session.user_id import UserIdentifier
+
+    result = await MemoryFilePolicyUpdater(viking_fs=fs, vikingdb=vikingdb).apply(
+        plan,
+        policy_set,
+        RequestContext(user=UserIdentifier("default", "u"), role=Role.USER),
+    )
+
+    assert result.errors == []
+    assert result.written_uris == [policy_set.policies[0].uri]
+    assert len(vikingdb.embedding_messages) == 1
+    embedding_msg = vikingdb.embedding_messages[0]
+    assert embedding_msg.context_data["uri"] == policy_set.policies[0].uri
+    assert embedding_msg.context_data["context_type"] == "memory"
+    assert "new content" in embedding_msg.message
 
 
 @pytest.mark.asyncio
@@ -447,7 +487,8 @@ async def test_patch_merge_policy_optimizer_runs_patch_merge_extract_loop(monkey
     ]
     assert captured["context_provider"].__class__.__name__ == "PatchMergeContextProvider"
     assert captured["context_provider"].get_tools() == []
-    assert "```diff" in captured["prefetch_messages"][-1]["content"]
+    assert "Patch 1" in captured["prefetch_messages"][-1]["content"]
+    assert "  content:" in captured["prefetch_messages"][-1]["content"]
     assert "-stale content" in captured["prefetch_messages"][-1]["content"]
     assert "+merged content" in captured["prefetch_messages"][-1]["content"]
 
@@ -541,7 +582,7 @@ async def test_patch_merge_policy_optimizer_merges_all_patch_gradients_once(monk
         f"{root}/处理酒店重复预订.md",
     ]
     assert len(provider.patches) == 2
-    assert captured["prefetch_messages"][-1]["content"].count("## Memory Patch") == 2
+    assert captured["prefetch_messages"][-1]["content"].count("\nPatch ") == 2
     assert plan.metadata["optimizer"] == "patch_merge"
     assert plan.metadata["patch_gradient_count"] == 2
     assert len(plan.items) == 1
