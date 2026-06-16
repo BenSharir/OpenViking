@@ -210,7 +210,7 @@ class MemoryIsolationHandler:
         has_ranges = operation.memory_fields.get("ranges") is not None
         if not self._schema_peer_routing_enabled(memory_type_schema):
             operation.memory_fields.pop("peer_id", None)
-            target_ids = [_SELF_PEER_ID] if self.allow_self else []
+            target_ids = [_SELF_PEER_ID]
         elif operation.memory_fields.get("ranges") is not None:
             target_ids = self._range_targets(
                 operation.memory_fields.get("ranges"),
