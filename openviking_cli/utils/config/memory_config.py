@@ -94,7 +94,7 @@ class MemoryConfig(BaseModel):
         if isinstance(data, dict) and "agent_memory_enabled" in data:
             data = dict(data)
             data.pop("agent_memory_enabled", None)
-            logger.warning(
+            logger.debug(
                 "memory.agent_memory_enabled is deprecated and ignored; "
                 "use session memory_policy.memory_types to control trajectory/experience extraction"
             )
@@ -104,7 +104,7 @@ class MemoryConfig(BaseModel):
     @classmethod
     def accept_deprecated_version(cls, value: Any) -> str:
         if value not in (None, ""):
-            logger.warning(
+            logger.debug(
                 "memory.version is deprecated and ignored; memory extraction always uses v3"
             )
         return "v3"
