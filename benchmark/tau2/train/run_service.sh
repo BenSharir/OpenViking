@@ -43,6 +43,7 @@ KILL_EXISTING=1
 ROLLOUT_LANGUAGE="default"
 ROLLOUT_BACKEND="${TAU2_ROLLOUT_BACKEND:-native}"
 NATIVE_THREAD_WORKERS="${TAU2_NATIVE_THREAD_WORKERS:-128}"
+REPAIR_VIKINGBOT_GYM=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -53,6 +54,7 @@ while [[ $# -gt 0 ]]; do
     --rollout-language) ROLLOUT_LANGUAGE="$2"; shift 2 ;;
     --rollout-backend) ROLLOUT_BACKEND="$2"; shift 2 ;;
     --native-thread-workers) NATIVE_THREAD_WORKERS="$2"; shift 2 ;;
+    --repair-vikingbot-gym) REPAIR_VIKINGBOT_GYM=1; shift 1 ;;
     --no-kill-existing) KILL_EXISTING=0; shift 1 ;;
     -h|--help)
       cat <<'EOF'
@@ -68,6 +70,9 @@ Options:
                      Rollout implementation backend. Default: native.
   --native-thread-workers N
                      Default thread pool workers for native rollout. Default: 128.
+  --repair-vikingbot-gym
+                     If --rollout-backend=vikingbot and tau2.gym/gymnasium is missing,
+                     install tau2-bench[gym] into the current Python environment.
   --no-kill-existing Do not stop existing process listening on --port
 EOF
       exit 0 ;;
@@ -122,6 +127,47 @@ export OPENAI_API_BASE="${OPENAI_API_BASE:-https://ark.cn-beijing.volces.com/api
 export OPENAI_BASE_URL="${OPENAI_BASE_URL:-${OPENAI_API_BASE}}"
 export AGENT_API_BASE="${AGENT_API_BASE:-${OPENAI_API_BASE}}"
 export USER_API_BASE="${USER_API_BASE:-${OPENAI_API_BASE}}"
+
+check_vikingbot_user_simulator() {
+  "${PYTHON_BIN}" - <<'PY' >/dev/null 2>&1
+from tau2.gym.gym_agent import AgentGymEnv
+import gymnasium  # noqa: F401
+assert AgentGymEnv is not None
+PY
+}
+
+repair_vikingbot_user_simulator() {
+  if [[ -z "${TAU2_BENCH_ROOT}" || ! -d "${TAU2_BENCH_ROOT}" ]]; then
+    echo "[tau2-service] cannot repair vikingbot user simulator: tau2-bench root not found." >&2
+    echo "[tau2-service] set TAU2_BENCH_ROOT or pass --data-root <tau2-bench>/data/tau2." >&2
+    return 1
+  fi
+  echo "[tau2-service] repairing vikingbot user simulator dependency: ${PYTHON_BIN} -m pip install -e ${TAU2_BENCH_ROOT}[gym]"
+  "${PYTHON_BIN}" -m pip install -e "${TAU2_BENCH_ROOT}[gym]"
+}
+
+if [[ "${ROLLOUT_BACKEND}" == "vikingbot" ]]; then
+  if ! check_vikingbot_user_simulator && [[ "${REPAIR_VIKINGBOT_GYM}" == "1" ]]; then
+    if ! repair_vikingbot_user_simulator; then
+      echo "[tau2-service] vikingbot user simulator repair failed; validating again before exit." >&2
+    fi
+  fi
+  if ! check_vikingbot_user_simulator; then
+    cat >&2 <<EOF
+[tau2-service] vikingbot backend requires tau2.gym.gym_agent.AgentGymEnv and gymnasium.
+[tau2-service] Without them, communicate_with_user falls back to a fixed string and the user simulator is NOT active.
+[tau2-service]
+[tau2-service] Fix one of:
+[tau2-service]   source benchmark/tau2/vikingbot/setup_env.sh
+[tau2-service]   ${PYTHON_BIN} -m pip install -e "${TAU2_BENCH_ROOT:-<tau2-bench>}[gym]"
+[tau2-service]   bash benchmark/tau2/train/run_service.sh --rollout-backend vikingbot --repair-vikingbot-gym
+EOF
+    exit 1
+  fi
+  if [[ -z "${OPENAI_API_KEY:-}" ]]; then
+    echo "[tau2-service] WARNING: OPENAI_API_KEY/ARK_API_KEY is empty; tau2 user simulator LLM calls may fail." >&2
+  fi
+fi
 
 cd "${REPO_ROOT}"
 export TAU2_ROLLOUT_BACKEND="${ROLLOUT_BACKEND}"
