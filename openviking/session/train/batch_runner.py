@@ -657,7 +657,15 @@ class UnusedPolicyOptimizer:
 
 
 class UnusedPolicyUpdater:
-    async def apply(self, plan: PolicyUpdatePlan, policy_set: ExperienceSet, context: Any):
+    async def apply(
+        self,
+        plan: PolicyUpdatePlan,
+        policy_set: ExperienceSet,
+        context: Any,
+        *,
+        transaction_handle: Any = None,
+    ):
+        del transaction_handle
         raise RuntimeError("policy_trainer handles training; policy updater must not run")
 
 

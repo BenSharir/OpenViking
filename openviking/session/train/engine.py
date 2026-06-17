@@ -84,7 +84,7 @@ class PolicyTrainingEngine:
         policy_set: ExperienceSet,
         ctx: PipelineContext,
     ) -> tuple[PolicyUpdatePlan, PolicyApplyResult]:
-        async with policy_set.lock():
+        async with policy_set.lock() as transaction_handle:
             latest_policy_set = await policy_set.reload()
             plan = await self.policy_optimizer.plan(
                 gradients,
@@ -95,5 +95,6 @@ class PolicyTrainingEngine:
                 plan,
                 latest_policy_set,
                 ctx.apply_context or latest_policy_set.request_context,
+                transaction_handle=transaction_handle,
             )
         return plan, apply_result

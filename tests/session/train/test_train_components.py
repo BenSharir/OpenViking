@@ -27,6 +27,7 @@ from openviking.session.train import (
 class FakeVikingFS:
     def __init__(self, files: dict[str, str]):
         self.files = files
+        self.rm_lock_handles = []
 
     async def ls(self, uri: str, output: str = "original", ctx=None, **kwargs):
         del kwargs
@@ -49,7 +50,8 @@ class FakeVikingFS:
         self.files[uri] = content
 
     async def rm(self, uri: str, recursive: bool = False, ctx=None, lock_handle=None):
-        del recursive, ctx, lock_handle
+        del recursive, ctx
+        self.rm_lock_handles.append(lock_handle)
         self.files.pop(uri, None)
         return {"estimated_deleted_count": 1}
 
@@ -389,14 +391,20 @@ async def test_memory_file_policy_updater_deletes_experience_files():
     uri = policy_set.policies[0].uri
     fs = FakeVikingFS({uri: "content"})
     plan = _delete_plan(uri=uri)
+    lock_handle = object()
 
-    result = await MemoryFilePolicyUpdater(viking_fs=fs).apply(plan, policy_set)
+    result = await MemoryFilePolicyUpdater(viking_fs=fs).apply(
+        plan,
+        policy_set,
+        transaction_handle=lock_handle,
+    )
 
     assert result.errors == []
     assert result.written_uris == []
     assert result.deleted_uris == [uri]
     assert result.updated_policy_set.policies == []
     assert uri not in fs.files
+    assert fs.rm_lock_handles == [lock_handle]
 
 
 @pytest.mark.asyncio

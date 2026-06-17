@@ -73,6 +73,8 @@ class PolicyUpdater(Protocol):
         plan: PolicyUpdatePlan,
         policy_set: ExperienceSet,
         context: Any,
+        *,
+        transaction_handle: Any = None,
     ) -> PolicyApplyResult: ...
 
 

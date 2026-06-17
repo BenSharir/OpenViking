@@ -226,12 +226,21 @@ class DummyOptimizer:
 
 
 class DummyUpdater:
+    last_instance = None
+
+    def __init__(self):
+        self.transaction_handles = []
+        DummyUpdater.last_instance = self
+
     async def apply(
         self,
         plan: PolicyUpdatePlan,
         policy_set: ExperienceSet,
         context: Any,
+        *,
+        transaction_handle: Any = None,
     ) -> PolicyApplyResult:
+        self.transaction_handles.append(transaction_handle)
         updated = ExperienceSet(
             root_uri=policy_set.root_uri,
             policies=[
@@ -331,6 +340,9 @@ async def test_default_policy_optimization_pipeline_runs_one_batch():
     assert result.apply_result.written_uris == [
         "viking://user/u/memories/experiences/booking_duplicate_handling.md"
     ]
+    assert DummyUpdater.last_instance is not None
+    assert len(DummyUpdater.last_instance.transaction_handles) == 1
+    assert DummyUpdater.last_instance.transaction_handles[0] is not None
     assert initial_policy_set.viking_fs.reloads == 1
     assert len(result.epochs) == 1
     assert result.epochs[0].epoch == 0

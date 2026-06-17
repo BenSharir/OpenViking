@@ -47,8 +47,11 @@ class DryRunPolicyUpdater:
         plan: PolicyUpdatePlan,
         policy_set: ExperienceSet,
         context: Any = None,
+        *,
+        transaction_handle: Any = None,
     ) -> PolicyApplyResult:
         del context
+        del transaction_handle
         updated_policy_set = (
             _apply_items_to_snapshot(plan.items, policy_set)
             if self.simulate and plan.items
@@ -85,6 +88,8 @@ class MemoryFilePolicyUpdater:
         plan: PolicyUpdatePlan,
         policy_set: ExperienceSet,
         context: Any = None,
+        *,
+        transaction_handle: Any = None,
     ) -> PolicyApplyResult:
         viking_fs = self.viking_fs or get_viking_fs()
         if viking_fs is None:
@@ -96,7 +101,11 @@ class MemoryFilePolicyUpdater:
             policy_set=policy_set,
             updated_policy_set=updated_policy_set,
         )
-        updater = MemoryUpdater(registry=create_default_registry(), vikingdb=self.vikingdb)
+        updater = MemoryUpdater(
+            registry=create_default_registry(),
+            vikingdb=self.vikingdb,
+            transaction_handle=transaction_handle,
+        )
         updater._viking_fs = viking_fs
 
         apply_result = await updater.apply_operations(
