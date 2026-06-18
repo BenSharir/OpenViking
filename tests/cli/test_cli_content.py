@@ -8,7 +8,7 @@ import time
 import uuid
 
 import pytest
-from conftest import ov
+from conftest import ov, ov_add_resource
 
 pytestmark = pytest.mark.cli_remote
 
@@ -124,10 +124,7 @@ class TestContentReindex:
         try:
             r = None
             for _attempt in range(10):
-                r = ov(
-                    ["add-resource", temp_path, "--to", reindex_pack, "--wait", "-o", "json"],
-                    timeout=120,
-                )
+                r = ov_add_resource(temp_path, reindex_pack)
                 if r["exit_code"] == 0:
                     break
                 if (

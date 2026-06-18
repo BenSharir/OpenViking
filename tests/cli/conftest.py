@@ -285,6 +285,8 @@ def _write_cli_config():
 
 
 CLI_CONFIG_PATH = _write_cli_config()
+ADD_RESOURCE_WAIT_TIMEOUT = "300"
+ADD_RESOURCE_COMMAND_TIMEOUT = 360
 
 
 def _env():
@@ -393,6 +395,24 @@ def ov(args, timeout=120):
     }
 
 
+def ov_add_resource(path, to_uri, *extra_args):
+    return ov(
+        [
+            "add-resource",
+            path,
+            "--to",
+            to_uri,
+            *extra_args,
+            "--wait",
+            "--timeout",
+            ADD_RESOURCE_WAIT_TIMEOUT,
+            "-o",
+            "json",
+        ],
+        timeout=ADD_RESOURCE_COMMAND_TIMEOUT,
+    )
+
+
 def _wait_for_resource_ready(uri, retries=20, interval=10):
     for _attempt in range(retries):
         r = ov(["read", uri, "-o", "json"], timeout=30)
@@ -466,20 +486,7 @@ def test_pack_uri(test_dir_uri):
         pack_uri = f"{test_dir_uri}/test_pack"
         r = None
         for _attempt in range(10):
-            r = ov(
-                [
-                    "add-resource",
-                    temp_path,
-                    "--to",
-                    pack_uri,
-                    "--wait",
-                    "--timeout",
-                    "300",
-                    "-o",
-                    "json",
-                ],
-                timeout=360,
-            )
+            r = ov_add_resource(temp_path, pack_uri)
             if r["exit_code"] == 0:
                 break
             if "CONFLICT" in (r.get("stderr") or "") or "busy" in (r.get("stderr") or "").lower():

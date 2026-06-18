@@ -8,7 +8,7 @@ import time
 import uuid
 
 import pytest
-from conftest import ov
+from conftest import ov, ov_add_resource
 
 pytestmark = pytest.mark.cli_remote
 
@@ -134,7 +134,7 @@ class TestFsMv:
             f.write("move me")
             temp_path = f.name
         try:
-            ov(["add-resource", temp_path, "--to", src_uri, "--wait", "-o", "json"], timeout=120)
+            ov_add_resource(temp_path, src_uri)
         finally:
             os.unlink(temp_path)
         time.sleep(15)
