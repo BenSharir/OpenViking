@@ -7,6 +7,7 @@ configuration semantics are consistent with openviking server's vlm section.
 
 import asyncio
 import random
+import re
 import time
 from collections.abc import AsyncIterator
 from typing import Any
@@ -26,7 +27,6 @@ from vikingbot.providers.base import (
 from vikingbot.utils.tracing import get_current_response_id
 
 _RETRYABLE_RATE_LIMIT_MARKERS = (
-    "429",
     "TooManyRequests",
     "RateLimitExceeded",
     "ModelAccountTpmRateLimitExceeded",
@@ -35,31 +35,88 @@ _RETRYABLE_RATE_LIMIT_MARKERS = (
     "rate limit",
     "rate_limit",
 )
-_NON_RETRYABLE_MARKERS = (
-    "AccountQuotaExceeded",
-    "InsufficientQuota",
-    "AuthenticationError",
-    "401",
-    "Unauthorized",
-    "PermissionDenied",
-    "403",
-    "InvalidAuthentication",
-    "InvalidRequest",
-    "invalid_request",
-    "context_length_exceeded",
+_RATE_LIMIT_STATUS_RE = re.compile(
+    r"(?:\b(?:error\s*code|status(?:\s*code)?|http(?:\s*status)?|code)"
+    r"\s*[:=]?\s*429(?!\w)|(?<![\w-])429(?![\w-]))",
+    re.IGNORECASE,
 )
+_RATE_LIMIT_ERROR_CLASSES: tuple[type[BaseException], ...] = ()
 _RETRY_BASE_DELAY_SECONDS = 5.0
 _RETRY_MAX_DELAY_SECONDS = 120.0
 
 
+def _load_rate_limit_error_classes() -> tuple[type[BaseException], ...]:
+    classes: list[type[BaseException]] = []
+    try:
+        import openai
+
+        classes.append(openai.RateLimitError)
+    except Exception:
+        pass
+    try:
+        from volcenginesdkarkruntime._exceptions import ArkRateLimitError
+
+        classes.append(ArkRateLimitError)
+    except Exception:
+        pass
+    return tuple(classes)
+
+
+def _iter_exception_chain(exc: BaseException) -> list[BaseException]:
+    chain: list[BaseException] = []
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        chain.append(cur)
+        seen.add(id(cur))
+        cur = cur.__cause__ or cur.__context__
+    return chain
+
+
+def _structured_rate_limit_match(exc: BaseException) -> bool:
+    global _RATE_LIMIT_ERROR_CLASSES
+    if not _RATE_LIMIT_ERROR_CLASSES:
+        _RATE_LIMIT_ERROR_CLASSES = _load_rate_limit_error_classes()
+
+    for item in _iter_exception_chain(exc):
+        if _RATE_LIMIT_ERROR_CLASSES and isinstance(item, _RATE_LIMIT_ERROR_CLASSES):
+            return True
+        status_code = getattr(item, "status_code", None)
+        if status_code == 429 or str(status_code) == "429":
+            return True
+        code = getattr(item, "code", None)
+        error_type = getattr(item, "type", None)
+        if any(
+            isinstance(value, str)
+            and any(marker.lower() in value.lower() for marker in _RETRYABLE_RATE_LIMIT_MARKERS)
+            for value in (code, error_type)
+        ):
+            return True
+        body = getattr(item, "body", None)
+        if isinstance(body, dict):
+            values = [body.get("code"), body.get("type"), body.get("message")]
+            if isinstance(body.get("error"), dict):
+                error = body["error"]
+                values.extend([error.get("code"), error.get("type"), error.get("message")])
+            if any(
+                isinstance(value, str)
+                and any(marker.lower() in value.lower() for marker in _RETRYABLE_RATE_LIMIT_MARKERS)
+                for value in values
+            ):
+                return True
+    return False
+
+
 def _is_retryable_rate_limit_error(exc: Exception) -> bool:
+    if _structured_rate_limit_match(exc):
+        return True
     text = str(exc or "")
     if not text:
         return False
     lower_text = text.lower()
-    if any(marker.lower() in lower_text for marker in _NON_RETRYABLE_MARKERS):
-        return False
-    return any(marker.lower() in lower_text for marker in _RETRYABLE_RATE_LIMIT_MARKERS)
+    return any(marker.lower() in lower_text for marker in _RETRYABLE_RATE_LIMIT_MARKERS) or bool(
+        _RATE_LIMIT_STATUS_RE.search(text)
+    )
 
 
 def _rate_limit_retry_delay(attempt: int) -> float:

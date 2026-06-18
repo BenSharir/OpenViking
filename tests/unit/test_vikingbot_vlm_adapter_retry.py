@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 
+import httpx
 import pytest
+from volcenginesdkarkruntime._exceptions import ArkRateLimitError
 
 import vikingbot.providers.vlm_adapter as vlm_adapter
 from vikingbot.providers.vlm_adapter import (
@@ -94,19 +96,19 @@ async def test_chat_retries_rate_limit_until_success(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_chat_does_not_retry_quota_or_auth_errors(monkeypatch):
+async def test_chat_does_not_retry_errors_without_rate_limit_markers(monkeypatch):
     async def _sleep(_delay: float):
         raise AssertionError("non-retryable errors must not sleep/retry")
 
     monkeypatch.setattr(vlm_adapter.asyncio, "sleep", _sleep)
 
-    fake_vlm = _FakeVLM([RuntimeError("AccountQuotaExceeded 429")])
+    fake_vlm = _FakeVLM([RuntimeError("AuthenticationError Unauthorized")])
     adapter = VLMProviderAdapter(fake_vlm, "test-model", langfuse_client=_DisabledLangfuse())
 
     response = await adapter.chat(messages=[{"role": "user", "content": "hello"}])
 
     assert response.finish_reason == "error"
-    assert "AccountQuotaExceeded" in response.content
+    assert "AuthenticationError" in response.content
     assert fake_vlm.calls == 1
 
 
@@ -158,4 +160,34 @@ def test_rate_limit_classifier_handles_target_error():
     assert _is_retryable_rate_limit_error(
         RuntimeError("Error code: 429 - ModelAccountTpmRateLimitExceeded")
     )
+    assert _is_retryable_rate_limit_error(
+        RuntimeError(
+            "Error code: 429 - {'error': {'code': 'ModelAccountTpmRateLimitExceeded', "
+            "'message': 'TPM (Tokens Per Minute) limit of the model doubao-seed-2-0-pro "
+            "is exceeded. Please try again later Request id: "
+            "0217817720969006061aa40146dbf4d117b0497e84060d7ac9102', "
+            "'param': '', 'type': 'TooManyRequests'}}, request_id: "
+            "202606181641366ORRzhOSo5se81lzpolL"
+        )
+    )
+    assert _is_retryable_rate_limit_error(RuntimeError("Error code: 429 - busy"))
     assert not _is_retryable_rate_limit_error(RuntimeError("Error code: 401 Unauthorized"))
+    assert not _is_retryable_rate_limit_error(RuntimeError("trace_id=abc429def unrelated"))
+    assert not _is_retryable_rate_limit_error(RuntimeError("request_id=abc429def unrelated"))
+
+
+def test_rate_limit_classifier_handles_structured_sdk_errors():
+    request = httpx.Request("POST", "https://example.test")
+    response = httpx.Response(429, request=request)
+    exc = ArkRateLimitError(
+        "Error code: 429 - rate limited",
+        response=response,
+        body={
+            "code": "ModelAccountTpmRateLimitExceeded",
+            "type": "TooManyRequests",
+            "message": "TPM limit exceeded",
+        },
+        request_id="0217817720969006061aa40146dbf4d117b0497e84060d7ac9102",
+    )
+
+    assert _is_retryable_rate_limit_error(exc)
