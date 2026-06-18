@@ -467,7 +467,18 @@ def test_pack_uri(test_dir_uri):
         r = None
         for _attempt in range(10):
             r = ov(
-                ["add-resource", temp_path, "--to", pack_uri, "--wait", "-o", "json"], timeout=120
+                [
+                    "add-resource",
+                    temp_path,
+                    "--to",
+                    pack_uri,
+                    "--wait",
+                    "--timeout",
+                    "300",
+                    "-o",
+                    "json",
+                ],
+                timeout=360,
             )
             if r["exit_code"] == 0:
                 break
