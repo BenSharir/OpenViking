@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import asyncio
-import time
+import threading
 
 import pytest
 
@@ -487,24 +487,28 @@ def test_tau2_service_rollout_backend_option_overrides_default(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_tau2_vikingbot_rollout_does_not_block_event_loop(monkeypatch):
+async def test_tau2_vikingbot_rollout_runs_on_current_event_loop():
     from benchmark.tau2.train.rollout_executor_vikingbot import VikingBotTau2RolloutExecutor
+
+    expected_loop = asyncio.get_running_loop()
+    expected_thread = threading.get_ident()
+    observed = {}
 
     class FakeVikingBotExecutor(VikingBotTau2RolloutExecutor):
         async def _execute_one_async(self, case, context):
             del context
-            time.sleep(0.2)
+            observed["loop"] = asyncio.get_running_loop()
+            observed["thread"] = threading.get_ident()
+            await asyncio.sleep(0)
             return case.name
 
     executor = FakeVikingBotExecutor()
-    heartbeat = asyncio.create_task(asyncio.sleep(0.05))
-    rollout_task = asyncio.create_task(
-        executor._execute_one(
-            _case(),
-            ExecutionContext(policy_snapshot_id="snapshot", metadata={}),
-        )
+
+    result = await executor._execute_one(
+        _case(),
+        ExecutionContext(policy_snapshot_id="snapshot", metadata={}),
     )
 
-    await asyncio.wait_for(heartbeat, timeout=0.15)
-    assert not rollout_task.done()
-    assert await rollout_task == "case-1"
+    assert result == "case-1"
+    assert observed["loop"] is expected_loop
+    assert observed["thread"] == expected_thread

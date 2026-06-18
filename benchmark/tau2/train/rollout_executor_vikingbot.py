@@ -142,10 +142,7 @@ class VikingBotTau2RolloutExecutor:
         return list(await asyncio.gather(*(run_one(case) for case in cases)))
 
     async def _execute_one(self, case: Case, context: ExecutionContext) -> Rollout:
-        return await asyncio.to_thread(self._execute_one_in_thread, case, context)
-
-    def _execute_one_in_thread(self, case: Case, context: ExecutionContext) -> Rollout:
-        return asyncio.run(self._execute_one_async(case, context))
+        return await self._execute_one_async(case, context)
 
     async def _execute_one_async(self, case: Case, context: ExecutionContext) -> Rollout:
         domain = str(case.input["domain"])
