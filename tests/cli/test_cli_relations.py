@@ -7,7 +7,7 @@ import tempfile
 import uuid
 
 import pytest
-from conftest import ov, ov_add_resource
+from conftest import ov, ov_add_resource, ov_rm
 
 pytestmark = pytest.mark.cli_remote
 
@@ -50,4 +50,4 @@ class TestLinkUnlink:
         unlink_data = unlink_r["json"]
         assert unlink_data.get("ok") is True, f"Expected ok=true, got {unlink_data.get('ok')}"
 
-        ov(["rm", second_pack_uri, "-r", "-o", "json"])
+        ov_rm(second_pack_uri)
