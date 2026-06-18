@@ -2,12 +2,12 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+import vikingbot.providers.vlm_adapter as vlm_adapter
+from vikingbot.providers.vlm_adapter import VLMProviderAdapter
 from volcenginesdkarkruntime._exceptions import ArkRateLimitError
 
-import vikingbot.providers.vlm_adapter as vlm_adapter
-from vikingbot.providers.vlm_adapter import (
-    VLMProviderAdapter,
-    _is_retryable_rate_limit_error,
+from openviking.utils.model_retry import (
+    is_retryable_rate_limit_error,
 )
 
 
@@ -75,7 +75,7 @@ async def test_chat_retries_rate_limit_until_success(monkeypatch):
     async def _sleep(delay: float):
         sleep_delays.append(delay)
 
-    monkeypatch.setattr(vlm_adapter, "_rate_limit_retry_delay", lambda attempt: attempt)
+    monkeypatch.setattr(vlm_adapter, "rate_limit_retry_delay", lambda attempt: attempt)
     monkeypatch.setattr(vlm_adapter.asyncio, "sleep", _sleep)
 
     fake_vlm = _FakeVLM(
@@ -119,7 +119,7 @@ async def test_chat_stream_retries_rate_limit_until_success(monkeypatch):
     async def _sleep(delay: float):
         sleep_delays.append(delay)
 
-    monkeypatch.setattr(vlm_adapter, "_rate_limit_retry_delay", lambda attempt: attempt)
+    monkeypatch.setattr(vlm_adapter, "rate_limit_retry_delay", lambda attempt: attempt)
     monkeypatch.setattr(vlm_adapter.asyncio, "sleep", _sleep)
 
     chunk = SimpleNamespace(
@@ -157,10 +157,10 @@ async def test_chat_stream_retries_rate_limit_until_success(monkeypatch):
 
 
 def test_rate_limit_classifier_handles_target_error():
-    assert _is_retryable_rate_limit_error(
+    assert is_retryable_rate_limit_error(
         RuntimeError("Error code: 429 - ModelAccountTpmRateLimitExceeded")
     )
-    assert _is_retryable_rate_limit_error(
+    assert is_retryable_rate_limit_error(
         RuntimeError(
             "Error code: 429 - {'error': {'code': 'ModelAccountTpmRateLimitExceeded', "
             "'message': 'TPM (Tokens Per Minute) limit of the model doubao-seed-2-0-pro "
@@ -170,10 +170,10 @@ def test_rate_limit_classifier_handles_target_error():
             "202606181641366ORRzhOSo5se81lzpolL"
         )
     )
-    assert _is_retryable_rate_limit_error(RuntimeError("Error code: 429 - busy"))
-    assert not _is_retryable_rate_limit_error(RuntimeError("Error code: 401 Unauthorized"))
-    assert not _is_retryable_rate_limit_error(RuntimeError("trace_id=abc429def unrelated"))
-    assert not _is_retryable_rate_limit_error(RuntimeError("request_id=abc429def unrelated"))
+    assert is_retryable_rate_limit_error(RuntimeError("Error code: 429 - busy"))
+    assert not is_retryable_rate_limit_error(RuntimeError("Error code: 401 Unauthorized"))
+    assert not is_retryable_rate_limit_error(RuntimeError("trace_id=abc429def unrelated"))
+    assert not is_retryable_rate_limit_error(RuntimeError("request_id=abc429def unrelated"))
 
 
 def test_rate_limit_classifier_handles_structured_sdk_errors():
@@ -190,4 +190,4 @@ def test_rate_limit_classifier_handles_structured_sdk_errors():
         request_id="0217817720969006061aa40146dbf4d117b0497e84060d7ac9102",
     )
 
-    assert _is_retryable_rate_limit_error(exc)
+    assert is_retryable_rate_limit_error(exc)

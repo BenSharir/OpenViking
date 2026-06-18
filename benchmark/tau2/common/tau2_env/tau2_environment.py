@@ -2,8 +2,125 @@
 
 from __future__ import annotations
 
+import importlib
 import json
+import os
+import time
+from collections.abc import Callable
+from functools import wraps
+from typing import Any
 from uuid import uuid4
+
+from openviking.utils.model_retry import is_retryable_rate_limit_error, rate_limit_retry_delay
+from openviking_cli.utils import get_logger
+
+logger = get_logger(__name__)
+
+TAU2_RATE_LIMIT_MAX_RETRIES_ENV = "TAU2_RATE_LIMIT_MAX_RETRIES"
+DEFAULT_TAU2_RATE_LIMIT_MAX_RETRIES = 8
+_TAU2_GENERATE_REFERENCE_MODULES = (
+    "tau2.agent.llm_agent",
+    "tau2.user.user_simulator",
+    "tau2.evaluator.evaluator_nl_assertions",
+    "tau2.environment.utils.interface_agent",
+)
+
+
+def _tau2_rate_limit_max_retries() -> int:
+    raw = os.getenv(TAU2_RATE_LIMIT_MAX_RETRIES_ENV)
+    if raw is None or not raw.strip():
+        return DEFAULT_TAU2_RATE_LIMIT_MAX_RETRIES
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        logger.warning(
+            "Invalid %s=%r; using default %d",
+            TAU2_RATE_LIMIT_MAX_RETRIES_ENV,
+            raw,
+            DEFAULT_TAU2_RATE_LIMIT_MAX_RETRIES,
+        )
+        return DEFAULT_TAU2_RATE_LIMIT_MAX_RETRIES
+
+
+def _is_tau2_retryable_rate_limit_error(exc: BaseException) -> bool:
+    return is_retryable_rate_limit_error(exc)
+
+
+def _tau2_rate_limit_retry_delay(attempt: int) -> float:
+    return rate_limit_retry_delay(attempt)
+
+
+def _wrap_tau2_generate_with_rate_limit_retry(generate: Callable[..., Any]) -> Callable[..., Any]:
+    if getattr(generate, "_openviking_tau2_rate_limit_retry", False):
+        return generate
+
+    @wraps(generate)
+    def generate_with_rate_limit_retry(*args: Any, **kwargs: Any) -> Any:
+        retries = _tau2_rate_limit_max_retries()
+        attempt = 1
+        while True:
+            try:
+                return generate(*args, **kwargs)
+            except Exception as exc:
+                if not _is_tau2_retryable_rate_limit_error(exc) or attempt > retries:
+                    raise
+                delay = _tau2_rate_limit_retry_delay(attempt)
+                logger.warning(
+                    "tau2 LiteLLM generate rate limited; retrying attempt=%d/%d "
+                    "delay=%.1fs error=%s",
+                    attempt,
+                    retries,
+                    delay,
+                    exc,
+                )
+                time.sleep(delay)
+                attempt += 1
+
+    generate_with_rate_limit_retry._openviking_tau2_rate_limit_retry = True
+    generate_with_rate_limit_retry._openviking_original_generate = generate
+    return generate_with_rate_limit_retry
+
+
+def _install_tau2_litellm_rate_limit_retry() -> None:
+    """Patch tau2-bench's sync LiteLLM generate path with rate-limit retry.
+
+    AgentGymEnv's user simulator and orchestrator call tau2.utils.llm_utils.generate
+    through synchronous module globals imported with ``from ... import generate``.
+    Those calls run in tau2's own worker thread, so a sync sleep-based retry is
+    safe and does not block the OpenViking service event loop.
+    """
+    try:
+        llm_utils = importlib.import_module("tau2.utils.llm_utils")
+    except Exception as exc:
+        logger.debug("tau2 llm_utils unavailable for rate-limit retry patch: %s", exc)
+        return
+
+    original = getattr(llm_utils, "_openviking_original_generate", None)
+    current = getattr(llm_utils, "generate", None)
+    if not callable(current):
+        return
+    if getattr(current, "_openviking_tau2_rate_limit_retry", False):
+        wrapped = current
+        original = getattr(current, "_openviking_original_generate", original)
+    else:
+        original = current
+        wrapped = _wrap_tau2_generate_with_rate_limit_retry(original)
+        llm_utils.generate = wrapped
+        llm_utils._openviking_original_generate = original
+
+    for module_name in _TAU2_GENERATE_REFERENCE_MODULES:
+        try:
+            module = importlib.import_module(module_name)
+        except Exception:
+            continue
+        module_generate = getattr(module, "generate", None)
+        if (
+            module_generate is original
+            or module_generate is current
+            or getattr(module_generate, "_openviking_tau2_rate_limit_retry", False)
+        ):
+            module.generate = wrapped
+
 
 try:
     from tau2.gym.gym_agent import AgentGymEnv
@@ -99,6 +216,7 @@ class Tau2BenchEnv:
 
 class _GymTau2BenchEnv:
     def __init__(self, domain: str, task_id: str):
+        _install_tau2_litellm_rate_limit_retry()
         self.env = AgentGymEnv(
             domain=domain,
             task_id=task_id,
@@ -139,9 +257,7 @@ class _GymTau2BenchEnv:
 
         from tau2.data_model.message import AssistantMessage
 
-        simulation.messages.append(
-            AssistantMessage(role="assistant", content=content)
-        )
+        simulation.messages.append(AssistantMessage(role="assistant", content=content))
         self.env._simulation_run = simulation
         self.simulation_run = simulation.model_dump_json(indent=2)
 

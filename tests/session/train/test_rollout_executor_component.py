@@ -267,6 +267,78 @@ def test_tau2_reward_info_is_json_safe_in_rollout_messages_and_evaluation():
     json.dumps(evaluation.metadata, sort_keys=True)
 
 
+def test_tau2_litellm_generate_rate_limit_retry_patch(monkeypatch):
+    import benchmark.tau2.common.tau2_env.tau2_environment as tau2_environment
+
+    calls = {"count": 0}
+    sleeps = []
+
+    def fake_generate():
+        calls["count"] += 1
+        if calls["count"] < 3:
+            raise RuntimeError("TPM (Tokens Per Minute) limit of the model is exceeded")
+        return "ok"
+
+    class FakeLLMUtils:
+        generate = staticmethod(fake_generate)
+
+    class FakeUserSimulator:
+        generate = staticmethod(fake_generate)
+
+    modules = {
+        "tau2.utils.llm_utils": FakeLLMUtils,
+        "tau2.user.user_simulator": FakeUserSimulator,
+    }
+
+    def fake_import_module(name):
+        if name in modules:
+            return modules[name]
+        raise ImportError(name)
+
+    monkeypatch.setattr(tau2_environment.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr(tau2_environment, "_tau2_rate_limit_max_retries", lambda: 3)
+    monkeypatch.setattr(tau2_environment, "_tau2_rate_limit_retry_delay", lambda attempt: attempt)
+    monkeypatch.setattr(tau2_environment.time, "sleep", lambda delay: sleeps.append(delay))
+
+    tau2_environment._install_tau2_litellm_rate_limit_retry()
+
+    assert FakeLLMUtils.generate() == "ok"
+    assert calls["count"] == 3
+    assert sleeps == [1, 2]
+    assert FakeUserSimulator.generate is FakeLLMUtils.generate
+
+
+def test_tau2_litellm_generate_retry_patch_does_not_retry_non_rate_limit(monkeypatch):
+    import benchmark.tau2.common.tau2_env.tau2_environment as tau2_environment
+
+    calls = {"count": 0}
+
+    def fake_generate():
+        calls["count"] += 1
+        raise RuntimeError("AuthenticationError Unauthorized")
+
+    class FakeLLMUtils:
+        generate = staticmethod(fake_generate)
+
+    def fake_import_module(name):
+        if name == "tau2.utils.llm_utils":
+            return FakeLLMUtils
+        raise ImportError(name)
+
+    monkeypatch.setattr(tau2_environment.importlib, "import_module", fake_import_module)
+
+    def fail_on_sleep(_delay):
+        raise AssertionError("unexpected sleep")
+
+    monkeypatch.setattr(tau2_environment.time, "sleep", fail_on_sleep)
+
+    tau2_environment._install_tau2_litellm_rate_limit_retry()
+
+    with pytest.raises(RuntimeError, match="AuthenticationError"):
+        FakeLLMUtils.generate()
+    assert calls["count"] == 1
+
+
 def test_tau2_native_env_reward_handles_required_id_and_tool_call_ids(monkeypatch):
     import benchmark.tau2.common.tau2_env.tau2_environment as tau2_environment
     from benchmark.tau2.common.tau2_env.tau2_environment import Tau2BenchEnv

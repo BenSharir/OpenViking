@@ -6,14 +6,13 @@ configuration semantics are consistent with openviking server's vlm section.
 """
 
 import asyncio
-import random
-import re
 import time
 from collections.abc import AsyncIterator
 from typing import Any
 
 from loguru import logger
 
+from openviking.utils.model_retry import is_retryable_rate_limit_error, rate_limit_retry_delay
 from vikingbot.integrations.langfuse import LangfuseClient
 from vikingbot.providers.base import (
     LLMProvider,
@@ -25,106 +24,6 @@ from vikingbot.providers.base import (
     stream_delta_value,
 )
 from vikingbot.utils.tracing import get_current_response_id
-
-_RETRYABLE_RATE_LIMIT_MARKERS = (
-    "TooManyRequests",
-    "RateLimitExceeded",
-    "ModelAccountTpmRateLimitExceeded",
-    "TPM (Tokens Per Minute) limit",
-    "RPM (Requests Per Minute) limit",
-    "rate limit",
-    "rate_limit",
-)
-_RATE_LIMIT_STATUS_RE = re.compile(
-    r"(?:\b(?:error\s*code|status(?:\s*code)?|http(?:\s*status)?|code)"
-    r"\s*[:=]?\s*429(?!\w)|(?<![\w-])429(?![\w-]))",
-    re.IGNORECASE,
-)
-_RATE_LIMIT_ERROR_CLASSES: tuple[type[BaseException], ...] = ()
-_RETRY_BASE_DELAY_SECONDS = 5.0
-_RETRY_MAX_DELAY_SECONDS = 120.0
-
-
-def _load_rate_limit_error_classes() -> tuple[type[BaseException], ...]:
-    classes: list[type[BaseException]] = []
-    try:
-        import openai
-
-        classes.append(openai.RateLimitError)
-    except Exception:
-        pass
-    try:
-        from volcenginesdkarkruntime._exceptions import ArkRateLimitError
-
-        classes.append(ArkRateLimitError)
-    except Exception:
-        pass
-    return tuple(classes)
-
-
-def _iter_exception_chain(exc: BaseException) -> list[BaseException]:
-    chain: list[BaseException] = []
-    seen: set[int] = set()
-    cur: BaseException | None = exc
-    while cur is not None and id(cur) not in seen:
-        chain.append(cur)
-        seen.add(id(cur))
-        cur = cur.__cause__ or cur.__context__
-    return chain
-
-
-def _structured_rate_limit_match(exc: BaseException) -> bool:
-    global _RATE_LIMIT_ERROR_CLASSES
-    if not _RATE_LIMIT_ERROR_CLASSES:
-        _RATE_LIMIT_ERROR_CLASSES = _load_rate_limit_error_classes()
-
-    for item in _iter_exception_chain(exc):
-        if _RATE_LIMIT_ERROR_CLASSES and isinstance(item, _RATE_LIMIT_ERROR_CLASSES):
-            return True
-        status_code = getattr(item, "status_code", None)
-        if status_code == 429 or str(status_code) == "429":
-            return True
-        code = getattr(item, "code", None)
-        error_type = getattr(item, "type", None)
-        if any(
-            isinstance(value, str)
-            and any(marker.lower() in value.lower() for marker in _RETRYABLE_RATE_LIMIT_MARKERS)
-            for value in (code, error_type)
-        ):
-            return True
-        body = getattr(item, "body", None)
-        if isinstance(body, dict):
-            values = [body.get("code"), body.get("type"), body.get("message")]
-            if isinstance(body.get("error"), dict):
-                error = body["error"]
-                values.extend([error.get("code"), error.get("type"), error.get("message")])
-            if any(
-                isinstance(value, str)
-                and any(marker.lower() in value.lower() for marker in _RETRYABLE_RATE_LIMIT_MARKERS)
-                for value in values
-            ):
-                return True
-    return False
-
-
-def _is_retryable_rate_limit_error(exc: Exception) -> bool:
-    if _structured_rate_limit_match(exc):
-        return True
-    text = str(exc or "")
-    if not text:
-        return False
-    lower_text = text.lower()
-    return any(marker.lower() in lower_text for marker in _RETRYABLE_RATE_LIMIT_MARKERS) or bool(
-        _RATE_LIMIT_STATUS_RE.search(text)
-    )
-
-
-def _rate_limit_retry_delay(attempt: int) -> float:
-    delay = min(
-        _RETRY_MAX_DELAY_SECONDS,
-        _RETRY_BASE_DELAY_SECONDS * (2 ** max(0, attempt - 1)),
-    )
-    return delay * random.uniform(0.8, 1.2)
 
 
 class VLMProviderAdapter(LLMProvider):
@@ -192,9 +91,9 @@ class VLMProviderAdapter(LLMProvider):
                     )
                     break
                 except Exception as e:
-                    if not _is_retryable_rate_limit_error(e):
+                    if not is_retryable_rate_limit_error(e):
                         raise
-                    delay = _rate_limit_retry_delay(attempt)
+                    delay = rate_limit_retry_delay(attempt)
                     logger.warning(
                         "VLM adapter chat rate limited; retrying attempt={} delay={:.1f}s error={}",
                         attempt,
@@ -333,7 +232,7 @@ class VLMProviderAdapter(LLMProvider):
                 )
                 return
             except Exception as e:
-                if not _is_retryable_rate_limit_error(e):
+                if not is_retryable_rate_limit_error(e):
                     yield LLMStreamEvent(
                         type="response",
                         response=LLMResponse(
@@ -342,7 +241,7 @@ class VLMProviderAdapter(LLMProvider):
                         ),
                     )
                     return
-                delay = _rate_limit_retry_delay(attempt)
+                delay = rate_limit_retry_delay(attempt)
                 logger.warning(
                     "VLM adapter stream rate limited; retrying attempt={} delay={:.1f}s error={}",
                     attempt,
@@ -380,9 +279,7 @@ class VLMProviderAdapter(LLMProvider):
         )
         cached = cls._usage_value(prompt_details, "cached_tokens") if prompt_details else 0
         reasoning = (
-            cls._usage_value(completion_details, "reasoning_tokens")
-            if completion_details
-            else 0
+            cls._usage_value(completion_details, "reasoning_tokens") if completion_details else 0
         )
         if cached:
             usage["cache_read_input_tokens"] = cached
