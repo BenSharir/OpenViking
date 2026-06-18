@@ -61,8 +61,8 @@ class BatchTrainEvalConfig:
     commit_poll_interval_seconds: float = 2.0
     commit_timeout_seconds: float | None = None
     commit_concurrency: int = 100
-    train_limit: int | None = None
-    eval_limit: int | None = None
+    train_index: int | None = None
+    eval_index: int | None = None
     benchmark_service_url: str | None = None
     baseline_force_recompute: bool = False
     eval_each_epoch: bool = False
@@ -90,10 +90,10 @@ class BatchTrainEvalConfig:
             raise ValueError("commit_timeout_seconds must be > 0")
         if self.commit_concurrency <= 0:
             raise ValueError("commit_concurrency must be > 0")
-        if self.train_limit is not None and self.train_limit <= 0:
-            raise ValueError("train_limit must be > 0")
-        if self.eval_limit is not None and self.eval_limit <= 0:
-            raise ValueError("eval_limit must be > 0")
+        if self.train_index is not None and self.train_index < 0:
+            raise ValueError("train_index must be >= 0")
+        if self.eval_index is not None and self.eval_index < 0:
+            raise ValueError("eval_index must be >= 0")
         if self.trials <= 0:
             raise ValueError("trials must be > 0")
         if self.benchmark_service_url is not None and not self.benchmark_service_url.strip():
@@ -110,8 +110,8 @@ class BatchTrainEvalReport:
     batch_size: int | None
     concurrency: int
     commit_concurrency: int
-    train_limit: int | None
-    eval_limit: int | None
+    train_index: int | None
+    eval_index: int | None
     policy_root_uri: str
     baseline_eval: dict[str, Any] | None
     train_epochs: list[dict[str, Any]] = field(default_factory=list)
@@ -142,8 +142,8 @@ class BatchTrainEvalReport:
             "batch_size": self.batch_size,
             "concurrency": self.concurrency,
             "commit_concurrency": self.commit_concurrency,
-            "train_limit": self.train_limit,
-            "eval_limit": self.eval_limit,
+            "train_index": self.train_index,
+            "eval_index": self.eval_index,
             "policy_root_uri": self.policy_root_uri,
             "baseline_eval": self.baseline_eval,
             "train_epochs": self.train_epochs,
@@ -198,8 +198,8 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             epochs=config.epochs,
             concurrency=config.concurrency,
             commit_concurrency=config.commit_concurrency,
-            train_limit=config.train_limit,
-            eval_limit=config.eval_limit,
+            train_index=config.train_index,
+            eval_index=config.eval_index,
             trials=config.trials,
             clean_result=config.clean_result,
             baseline_force_recompute=config.baseline_force_recompute,
@@ -236,7 +236,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
         final_eval: dict[str, Any] | None = None
         report_builder = PipelineReportBuilder(trial_index_key="eval_trial")
 
-        test_loader = _case_loader(config, split="test", limit=config.eval_limit)
+        test_loader = _case_loader(config, split="test", sample_index=config.eval_index)
         if await test_loader.split_exists():
             baseline_result, baseline_cache_hit = await _load_or_run_baseline_eval(
                 config=config,
@@ -258,7 +258,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
                 if baseline_eval is not None:
                     _print_baseline_cache_hit(baseline_eval, baseline_cache_path)
 
-        train_loader = _case_loader(config, split="train", limit=config.train_limit)
+        train_loader = _case_loader(config, split="train", sample_index=config.train_index)
 
         train_context = _pipeline_context(
             epoch=0,
@@ -319,8 +319,8 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             batch_size=config.batch_size,
             concurrency=config.concurrency,
             commit_concurrency=config.commit_concurrency,
-            train_limit=config.train_limit,
-            eval_limit=config.eval_limit,
+            train_index=config.train_index,
+            eval_index=config.eval_index,
             policy_root_uri=policy_root_uri,
             baseline_eval=baseline_eval,
             train_epochs=list(train_result.metadata.get("train_reports", [])),
@@ -498,7 +498,7 @@ def _write_baseline_cache(
         "dataset": config.dataset,
         "domain": config.domain,
         "split": "test",
-        "eval_limit": config.eval_limit,
+        "eval_index": config.eval_index,
         "trials": config.trials,
         "max_iterations": config.max_iterations,
         "keep_default_tools": config.keep_default_tools,
@@ -638,14 +638,22 @@ def _pipeline_context(
     )
 
 
-def _case_loader(config: BatchTrainEvalConfig, *, split: str, limit: int | None) -> RemoteCaseLoader:
+def _case_loader(
+    config: BatchTrainEvalConfig,
+    *,
+    split: str,
+    sample_index: int | None,
+) -> RemoteCaseLoader:
+    filters: dict[str, Any] = {}
+    if sample_index is not None:
+        filters["task_indices"] = [sample_index]
     return RemoteCaseLoader(
         service_url=_require_benchmark_service_url(config),
         dataset=config.dataset,
         domain=config.domain,
         split=split,
         batch_size=config.batch_size,
-        limit=limit,
+        filters=filters,
     )
 
 
@@ -722,15 +730,15 @@ def _baseline_cache_key(config: BatchTrainEvalConfig) -> str:
         "dataset": config.dataset,
         "domain": config.domain,
         "split": "test",
-        "eval_limit": config.eval_limit,
+        "eval_index": config.eval_index,
         "trials": config.trials,
         "max_iterations": config.max_iterations,
         "keep_default_tools": config.keep_default_tools,
     }
     stable = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     digest = sha256(stable.encode("utf-8")).hexdigest()[:16]
-    limit = "all" if config.eval_limit is None else str(config.eval_limit)
-    return f"{_cache_slug(config.domain)}_test_limit-{limit}_trials-{config.trials}_{digest}"
+    index = "all" if config.eval_index is None else str(config.eval_index)
+    return f"{_cache_slug(config.domain)}_test_index-{index}_trials-{config.trials}_{digest}"
 
 
 def _cache_slug(value: str) -> str:

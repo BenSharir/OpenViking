@@ -49,13 +49,13 @@ def create_app(
         split: str,
         filters: dict[str, Any],
     ) -> Tau2CaseLoader:
-        del filters
         if dataset != "tau2":
             raise ValueError(f"Unsupported dataset: {dataset}")
         return Tau2CaseLoader(
             domain=domain,
             split=split,
             data_root=data_root,
+            task_indices=_task_indices_from_filters(filters),
         )
 
     def make_rollout_executor(options: dict[str, Any]):
@@ -79,6 +79,21 @@ def create_app(
         make_case_loader=make_case_loader,
         make_rollout_executor=make_rollout_executor,
     )
+
+
+def _task_indices_from_filters(filters: dict[str, Any]) -> list[int] | None:
+    raw = filters.get("task_indices")
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        raise ValueError("task_indices filter must be a list")
+    indices: list[int] = []
+    for value in raw:
+        index = int(value)
+        if index < 0:
+            raise ValueError("task index must be >= 0")
+        indices.append(index)
+    return indices
 
 
 def parse_args() -> argparse.Namespace:

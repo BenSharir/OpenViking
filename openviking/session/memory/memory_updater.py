@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 
 from openviking.message import Message
-from openviking.message.part import ControlPart, TextPart
+from openviking.message.part import TextPart
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import (
     MemoryFile,
@@ -462,8 +462,6 @@ class MessageRange:
     def _message_content(self, message: Message) -> str:
         texts: List[str] = []
         for part in getattr(message, "parts", []) or []:
-            if isinstance(part, ControlPart):
-                continue
             if isinstance(part, TextPart):
                 texts.append(part.text or "")
         if texts:

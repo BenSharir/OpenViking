@@ -103,7 +103,7 @@ class RolloutArtifactRecorder(NoopPipelineLifecycleHook):
                 _RolloutRecord(
                     rollout=rollout,
                     evaluation=analysis.evaluation,
-                    stage=_stage_dir(label),
+                    stage=_stage_dir(label, epoch=epoch),
                     epoch=epoch,
                 )
                 for analysis in analyses
@@ -557,15 +557,15 @@ def _artifact_state_from_commit_result(commit_result: dict[str, Any] | None) -> 
 
 def _stage_from_execution_metadata(metadata: dict[str, Any]) -> str:
     stage = str(metadata.get("rollout_stage") or metadata.get("stage") or "")
+    epoch = int(metadata.get("epoch", 0) or 0)
     if not stage:
         training = bool(metadata.get("training"))
-        epoch = int(metadata.get("epoch", 0) or 0)
         if training:
             return f"epoch_{epoch}"
-        return "baseline_test" if epoch < 0 else f"test_rollout_epoch_{epoch}"
+        return "baseline_test" if epoch < 0 else f"test_epoch_{epoch}"
     if stage.startswith("train_rollout"):
-        return f"epoch_{metadata.get('epoch', 0)}"
-    return _stage_dir(stage.split(maxsplit=1)[0])
+        return f"epoch_{epoch}"
+    return _stage_dir(stage.split(maxsplit=1)[0], epoch=epoch)
 
 
 def _case_to_dict(case: Any) -> dict[str, Any]:
@@ -722,13 +722,13 @@ def _rollout_name(record: _RolloutRecord) -> str:
     return _safe_fragment(record.rollout.case.name)
 
 
-def _stage_dir(label: str) -> str:
+def _stage_dir(label: str, *, epoch: int | None = None) -> str:
     if label == "baseline_test_rollout":
         return "baseline_test"
     if label == "final_test_rollout":
         return "final_test"
     if label == "test_rollout":
-        return "test"
+        return "test" if epoch is None else f"test_epoch_{epoch}"
     return _safe_fragment(label)
 
 
@@ -810,13 +810,6 @@ def _format_commit_messages_markdown(messages: list[dict[str, Any]]) -> str:
                 text = part.get("text", "")
                 # Indent to make it a blockquote / code block if needed
                 lines.append(text)
-            elif part_type == "control":
-                lines.append(f"**Control:** `{part.get('control_type', '?')}`")
-                if part.get("payload") is not None:
-                    lines.append("")
-                    lines.append("```json")
-                    lines.append(json.dumps(part.get("payload"), ensure_ascii=False, indent=2))
-                    lines.append("```")
             elif part_type == "tool":
                 status = str(part.get("tool_status") or "")
                 label = "Tool result" if status in {"completed", "error"} else "Tool call"

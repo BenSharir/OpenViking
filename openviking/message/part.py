@@ -30,18 +30,6 @@ class ContextPart:
     abstract: str = ""
 
 
-
-
-@dataclass
-class ControlPart:
-    """Control-plane metadata component excluded from conversation text."""
-
-    type: Literal["control"] = "control"
-    control_type: str = ""
-    payload: Optional[dict] = None
-    text: str = ""
-
-
 @dataclass
 class ImagePart:
     """Image URL component compatible with OpenAI-style message content."""
@@ -86,7 +74,7 @@ class ToolPart:
     tool_output_group_budget_chars: Optional[int] = None
 
 
-Part = Union[TextPart, ContextPart, ImagePart, ToolPart, ControlPart]
+Part = Union[TextPart, ContextPart, ImagePart, ToolPart]
 
 
 def _parse_image_url_payload(data: Dict[str, Any]) -> tuple[str, Optional[str]]:
@@ -124,13 +112,6 @@ def part_from_dict(data: Dict[str, Any]) -> Part:
             url=url,
             detail=detail,
         )
-    elif part_type == "control":
-        payload = data.get("payload")
-        return ControlPart(
-            control_type=str(data.get("control_type", "") or ""),
-            payload=payload if isinstance(payload, dict) else None,
-            text=str(data.get("text", "") or ""),
-        )
     elif part_type == "tool":
         return ToolPart(
             tool_id=data.get("tool_id", ""),
@@ -160,4 +141,6 @@ def part_from_dict(data: Dict[str, Any]) -> Part:
             tool_output_group_budget_chars=data.get("tool_output_group_budget_chars"),
         )
     else:
+        if "text" in data:
+            return TextPart(text=str(data.get("text", "") or ""))
         return TextPart(text=str(data))

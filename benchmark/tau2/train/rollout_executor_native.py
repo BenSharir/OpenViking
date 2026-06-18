@@ -16,7 +16,7 @@ from benchmark.tau2.train.rollout_executor_vikingbot import (
     _stringify,
     _to_jsonable,
 )
-from openviking.message import ControlPart, Message, TextPart, ToolPart
+from openviking.message import Message, TextPart, ToolPart
 from openviking.session.train import (
     Case,
     CriterionResult,
@@ -810,11 +810,9 @@ def _simulation_message_to_rollout_messages(
     if role == "system":
         content = str(getattr(message, "content", "") or "")
         return [
-            _control_message(
+            _metadata_message(
                 f"tau2-system-{index}",
-                "tau2_system_prompt",
-                {"system_prompt": content},
-                text=f"system:\n{content}",
+                f"system:\n{content}",
             )
         ]
     if role in {"user", "assistant"}:
@@ -919,17 +917,14 @@ def _communicate_text_from_tool_input(tool_input: dict[str, Any] | None) -> str:
     return str(content)
 
 
-def _control_message(
+def _metadata_message(
     message_id: str,
-    control_type: str,
-    payload: dict[str, Any],
-    *,
-    text: str = "",
+    text: str,
 ) -> Message:
     return Message(
         id=message_id,
         role="user",
-        parts=[ControlPart(control_type=control_type, payload=payload, text=text)],
+        parts=[TextPart(text=text)],
     )
 
 

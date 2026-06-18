@@ -59,7 +59,12 @@ from openviking.session.train import (
     PatchMergePolicyOptimizer,
     PatchMergePolicyOptimizerContext,
     PipelineContext,
+    PolicyApplyResult,
+    PolicyPlanItem,
+    PolicyUpdatePlan,
     Rollout,
+    RolloutAnalysis,
+    RolloutTrainingResult,
     Rubric,
     RubricCriterion,
     SkillSetLoader,
@@ -625,8 +630,13 @@ class SessionCompressorV3:
                     context=gradient_context,
                     viking_fs=viking_fs,
                 )
+                exp_training_result = _trajectory_only_training_result(
+                    analysis=analysis,
+                    rollout=rollout,
+                    policy_set=exp_trainer.policy_set,
+                )
                 if exp_gradients:
-                    await exp_trainer.submit_gradients(
+                    exp_training_result = await exp_trainer.submit_gradients(
                         exp_gradients,
                         analysis=analysis,
                         rollout=rollout,
@@ -649,17 +659,18 @@ class SessionCompressorV3:
                 submitted += 1
 
                 if collect_memory_diff:
-                    # Build diff from exp trainer result (skill diffs not yet supported)
-                    last_result = getattr(exp_trainer, "last_apply_result", None)
-                    if last_result is not None:
-                        memory_diff = await self._build_training_memory_diff(
-                            training_result=last_result,
-                            viking_fs=viking_fs,
-                            ctx=ctx,
-                            archive_uri=archive_uri,
-                        )
-                        if _memory_diff_has_changes(memory_diff):
-                            memory_diffs.append(memory_diff)
+                    # Build diff from the strongly typed training result returned by
+                    # submit_gradients.  Do not use exp_trainer.last_apply_result here:
+                    # it is only a PolicyApplyResult and does not carry analyses/plan,
+                    # so trajectory and experience diffs would be lost.
+                    memory_diff = await self._build_training_memory_diff(
+                        training_result=exp_training_result,
+                        viking_fs=viking_fs,
+                        ctx=ctx,
+                        archive_uri=archive_uri,
+                    )
+                    if _memory_diff_has_changes(memory_diff):
+                        memory_diffs.append(memory_diff)
 
             tracer.info(
                 "Submitted commit case memories to streaming train: "
@@ -687,7 +698,7 @@ class SessionCompressorV3:
     async def _build_training_memory_diff(
         self,
         *,
-        training_result: Any,
+        training_result: RolloutTrainingResult,
         viking_fs: Any,
         ctx: RequestContext,
         archive_uri: str,
@@ -697,9 +708,9 @@ class SessionCompressorV3:
         deletes: list[dict[str, Any]] = []
 
         seen_trajectory_uris: set[str] = set()
-        for analysis in getattr(training_result, "analyses", []) or []:
-            for trajectory in getattr(analysis, "trajectories", []) or []:
-                uri = str(getattr(trajectory, "uri", "") or "")
+        for analysis in training_result.analyses:
+            for trajectory in analysis.trajectories:
+                uri = trajectory.uri
                 if not uri or uri in seen_trajectory_uris:
                     continue
                 seen_trajectory_uris.add(uri)
@@ -707,43 +718,42 @@ class SessionCompressorV3:
                     {
                         "uri": uri,
                         "memory_type": "trajectories",
-                        "after": str(getattr(trajectory, "content", "") or ""),
+                        "after": trajectory.content,
                     }
                 )
 
-        apply_result = getattr(training_result, "apply_result", None)
-        plan = getattr(training_result, "plan", None)
-        applied_uris = set(getattr(apply_result, "written_uris", []) or [])
-        deleted_uris = set(getattr(apply_result, "deleted_uris", []) or [])
-        policy_set = getattr(apply_result, "updated_policy_set", None)
-        root_uri = str(getattr(policy_set, "root_uri", "") or _experience_root_uri(ctx))
+        applied_uris = set(training_result.apply_result.written_uris)
+        deleted_uris = set(training_result.apply_result.deleted_uris)
+        root_uri = (
+            training_result.apply_result.updated_policy_set.root_uri
+            or _experience_root_uri(ctx)
+        )
 
-        for item in getattr(plan, "items", []) or []:
-            item_memory_type = getattr(item, "memory_type", None) or "experiences"
-            if item_memory_type != "experiences":
+        for item in training_result.plan.items:
+            if item.memory_type != "experiences":
                 continue
             uri = _experience_plan_item_uri(item, root_uri)
             if not uri:
                 continue
-            if getattr(item, "kind", None) == "delete":
+            if item.kind == "delete":
                 if uri in deleted_uris:
                     deletes.append(
                         {
                             "uri": uri,
                             "memory_type": "experiences",
-                            "deleted_content": str(getattr(item, "before_content", "") or ""),
+                            "deleted_content": item.before_content or "",
                         }
                     )
                 continue
-            if getattr(item, "kind", None) != "upsert" or uri not in applied_uris:
+            if item.kind != "upsert" or uri not in applied_uris:
                 continue
             after = await _read_plain_memory_content(
                 viking_fs,
                 uri=uri,
                 ctx=ctx,
-                fallback=str(getattr(item, "after_content", "") or ""),
+                fallback=item.after_content or "",
             )
-            before = getattr(item, "before_content", None)
+            before = item.before_content
             if before is None:
                 adds.append({"uri": uri, "memory_type": "experiences", "after": after})
             else:
@@ -751,7 +761,7 @@ class SessionCompressorV3:
                     {
                         "uri": uri,
                         "memory_type": "experiences",
-                        "before": str(before),
+                        "before": before,
                         "after": after,
                     }
                 )
@@ -836,24 +846,6 @@ def _training_case_from_first_message(
 
 
 def _training_case_spec_payload_from_message(message: Message) -> dict[str, Any] | None:
-    for part in getattr(message, "parts", []) or []:
-        if getattr(part, "type", "") != "control":
-            continue
-        if getattr(part, "control_type", "") != "batch_training_case_spec":
-            continue
-        payload = getattr(part, "payload", None)
-        if not isinstance(payload, dict):
-            raise ValueError("Training CaseSpec control payload must be a JSON object")
-        protocol = str(payload.get("protocol") or "")
-        if protocol != _TRAINING_CASE_SPEC_PROTOCOL:
-            raise ValueError(
-                "Training CaseSpec fast path protocol mismatch: "
-                f"expected {_TRAINING_CASE_SPEC_PROTOCOL!r}, got {protocol!r}"
-            )
-        if not isinstance(payload.get("case"), dict):
-            raise ValueError("Training CaseSpec fast path payload must contain a case object")
-        return payload
-
     text = _message_text(message).strip()
     if not text.startswith(_TRAINING_CASE_SPEC_HEADER):
         return None
@@ -1181,6 +1173,37 @@ def _gradient_memory_type(gradient: Any) -> str:
     return "experiences"
 
 
+def _trajectory_only_training_result(
+    *,
+    analysis: RolloutAnalysis,
+    rollout: Rollout,
+    policy_set: Any,
+) -> RolloutTrainingResult:
+    """Return a typed no-op training result that still carries trajectories.
+
+    Some rollouts produce useful trajectory memories but no experience gradients.
+    The memory diff should still include those trajectory writes, so callers use
+    this as the baseline result and replace it only when experience training
+    returns a full RolloutTrainingResult.
+    """
+
+    return RolloutTrainingResult(
+        analyses=[analysis],
+        gradients=[],
+        plan=PolicyUpdatePlan(items=[], metadata={"no_experience_gradients": True}),
+        apply_result=PolicyApplyResult(
+            updated_policy_set=policy_set,
+            written_uris=[],
+            errors=[],
+            metadata={"no_experience_gradients": True},
+        ),
+        metadata={
+            "source": "trajectory_only",
+            "case_name": rollout.case.name,
+            "trajectory_count": len(analysis.trajectories),
+        },
+    )
+
 def _dict_value(data: Any, key: str) -> Any:
     if isinstance(data, dict):
         return data.get(key)
@@ -1281,11 +1304,10 @@ async def _read_plain_memory_content(
         return fallback
 
 
-def _experience_plan_item_uri(item: Any, root_uri: str) -> str:
-    uri = str(getattr(item, "target_uri", "") or "")
-    if uri:
-        return uri
-    name = str(getattr(item, "target_name", "") or "new_experience")
+def _experience_plan_item_uri(item: PolicyPlanItem, root_uri: str) -> str:
+    if item.target_uri:
+        return item.target_uri
+    name = item.target_name or "new_experience"
     return f"{root_uri.rstrip('/')}/{_safe_experience_filename(name)}.md"
 
 

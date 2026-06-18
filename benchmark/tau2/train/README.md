@@ -56,14 +56,14 @@ Use `--epochs 0` to run final test evaluation without training:
 ```bash
 bash benchmark/tau2/train/run_batch_train_eval.sh \
   --epochs 0 \
-  --eval-limit 25 \
+  --eval-index 24 \
   --trials 8
 ```
 
 ## 3. Train with a cached pre-training test score
 
 The runner evaluates the test split before training automatically. For the same
-dataset/domain, `--eval-limit`, `--trials`, and rollout options, this baseline is
+dataset/domain, `--eval-index`, `--trials`, and rollout options, this baseline is
 cached under `result/tau2/train/cache/baseline/` and reused by later runs. Use
 `--force-baseline-recompute` to refresh it. The Tau2 wrapper also runs a test
 rollout after each training epoch so you can track held-out score progression.
@@ -71,8 +71,6 @@ rollout after each training epoch so you can track held-out score progression.
 ```bash
 bash benchmark/tau2/train/run_batch_train_eval.sh \
   --epochs 4 \
-  --train-limit 25 \
-  --eval-limit 25 \
   --trials 8
 ```
 
@@ -105,8 +103,8 @@ Default concurrency and output behavior:
 | `--concurrency` | `150` | Max concurrent rollout executions |
 | `--commit-concurrency` | `100` | Max concurrent `session.commit` submissions during training |
 | `--trials` | `8` | Run each eval case N times and aggregate scores |
-| `--train-limit` | unlimited | Cap train split size (for smoke tests) |
-| `--eval-limit` | unlimited | Cap eval split size (for smoke tests) |
+| `--train-index` | all | Run only the train sample at this 0-based split index |
+| `--eval-index` | all | Run only the eval/test sample at this 0-based split index |
 | `--max-iterations` | `30` | Max steps per rollout |
 | `--force-baseline-recompute` | off | Recompute cached pre-training test baseline instead of reusing it |
 | `--eval-each-epoch` | on in Tau2 wrapper | Run held-out eval after every training epoch |
@@ -128,8 +126,8 @@ Quick smoke test (1 train, 1 eval, 1 trial):
 bash benchmark/tau2/train/run_batch_train_eval.sh \
   --epochs 1 \
   --trials 1 \
-  --train-limit 1 \
-  --eval-limit 1
+  --train-index 0 \
+  --eval-index 0
 ```
 
 Full training run:

@@ -59,16 +59,16 @@ def parse_args() -> argparse.Namespace:
         help="Max steps/iterations per rollout (default: 30)",
     )
     parser.add_argument(
-        "--train-limit",
+        "--train-index",
         type=int,
         default=None,
-        help="Limit number of train cases for smoke tests.",
+        help="Run only the train sample at this 0-based split index. Default runs all train samples.",
     )
     parser.add_argument(
-        "--eval-limit",
+        "--eval-index",
         type=int,
         default=None,
-        help="Limit number of eval cases for smoke tests.",
+        help="Run only the eval/test sample at this 0-based split index. Default runs all eval samples.",
     )
     parser.add_argument(
         "--force-baseline-recompute",
@@ -130,8 +130,8 @@ async def main_async() -> int:
             events_path=args.events_output,
             keep_default_tools=True,
             max_iterations=args.max_iterations,
-            train_limit=args.train_limit,
-            eval_limit=args.eval_limit,
+            train_index=args.train_index,
+            eval_index=args.eval_index,
             benchmark_service_url=args.benchmark_service_url,
             baseline_force_recompute=args.force_baseline_recompute,
             eval_each_epoch=args.eval_each_epoch,

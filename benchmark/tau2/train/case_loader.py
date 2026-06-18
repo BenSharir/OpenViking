@@ -32,7 +32,7 @@ class Tau2CaseLoader:
     split: str
     batch_size: int | None = None
     data_root: str | None = None
-    limit: int | None = None
+    task_indices: list[int] | None = None
 
     async def batches(self, context: Any = None) -> AsyncIterator[list[Case]]:
         del context
@@ -43,24 +43,33 @@ class Tau2CaseLoader:
         for start in range(0, len(task_ids), size):
             yield [
                 self._case_from_task(task_no, task_id)
-                for task_no, task_id in enumerate(task_ids[start : start + size], start=start)
+                for task_no, task_id in task_ids[start : start + size]
             ]
 
     def load_cases(self) -> list[Case]:
         task_ids = self.load_task_ids()
-        return [self._case_from_task(task_no, task_id) for task_no, task_id in enumerate(task_ids)]
+        return [self._case_from_task(task_no, task_id) for task_no, task_id in task_ids]
 
-    def load_task_ids(self) -> list[str]:
+    def load_task_ids(self) -> list[tuple[int, str]]:
         data = _load_split_tasks(self.domain, self.data_root)
         values = data.get(self.split)
         if not isinstance(values, list):
             return []
-        task_ids = [str(item) for item in values]
-        if self.limit is None:
+        task_ids = [(task_no, str(item)) for task_no, item in enumerate(values)]
+        if self.task_indices is None:
             return task_ids
-        if self.limit <= 0:
-            raise ValueError("limit must be > 0")
-        return task_ids[: self.limit]
+        selected: list[tuple[int, str]] = []
+        for index in self.task_indices:
+            if index < 0:
+                raise ValueError("task_indices must be >= 0")
+            try:
+                selected.append(task_ids[index])
+            except IndexError as exc:
+                raise ValueError(
+                    f"task index out of range for split {self.split!r}: {index} "
+                    f"(size={len(task_ids)})"
+                ) from exc
+        return selected
 
     def split_exists(self) -> bool:
         data = _load_split_tasks(self.domain, self.data_root)

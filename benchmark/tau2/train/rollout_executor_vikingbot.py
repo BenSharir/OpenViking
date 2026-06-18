@@ -12,7 +12,7 @@ from typing import Any
 
 from fastapi.encoders import jsonable_encoder
 
-from openviking.message import ControlPart, Message, TextPart, ToolPart
+from openviking.message import Message, TextPart, ToolPart
 from openviking.session.train import (
     Case,
     CriterionResult,
@@ -554,11 +554,9 @@ def _build_rollout_messages(
     experience_reminder: str | None = None,
 ) -> list[Message]:
     messages = [
-        _control_message(
+        _metadata_message(
             "tau2-system",
-            "tau2_system_prompt",
-            {"system_prompt": system_prompt},
-            text=f"system:\n{system_prompt}",
+            f"system:\n{system_prompt}",
         ),
     ]
     # Experience Reminder 放在 system 之后、user 之前，与 agent 实际看到的顺序一致
@@ -632,17 +630,14 @@ def _message(message_id: str, role: str, text: str) -> Message:
     return Message(id=message_id, role=role, parts=[TextPart(text=text)])
 
 
-def _control_message(
+def _metadata_message(
     message_id: str,
-    control_type: str,
-    payload: dict[str, Any],
-    *,
-    text: str = "",
+    text: str,
 ) -> Message:
     return Message(
         id=message_id,
         role="user",
-        parts=[ControlPart(control_type=control_type, payload=payload, text=text)],
+        parts=[TextPart(text=text)],
     )
 
 

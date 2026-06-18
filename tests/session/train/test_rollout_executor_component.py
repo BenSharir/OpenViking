@@ -151,7 +151,7 @@ def test_dataset_service_policy_set_from_dict_preserves_policies():
 
 def test_tau2_rollout_messages_use_completed_structured_tool_parts():
     from benchmark.tau2.train.rollout_executor import _build_rollout_messages
-    from openviking.message import ControlPart, TextPart, ToolPart
+    from openviking.message import TextPart, ToolPart
 
     rollout_messages = _build_rollout_messages(
         system_prompt="policy",
@@ -168,8 +168,8 @@ def test_tau2_rollout_messages_use_completed_structured_tool_parts():
         reward=1.0,
     )
 
-    assert isinstance(rollout_messages[0].parts[0], ControlPart)
-    assert rollout_messages[0].parts[0].control_type == "tau2_system_prompt"
+    assert isinstance(rollout_messages[0].parts[0], TextPart)
+    assert rollout_messages[0].parts[0].text.startswith("system:\npolicy")
 
     tool_message = rollout_messages[2]
     assert tool_message.role == "user"

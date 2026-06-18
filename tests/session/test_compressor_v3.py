@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from openviking.message import ControlPart, Message, TextPart
+from openviking.message import Message, TextPart
 from openviking.server.identity import RequestContext, Role
 from openviking.session import create_session_compressor
 from openviking.session.compressor_v3 import SessionCompressorV3
@@ -293,13 +293,7 @@ def _case_spec_message(case: Case | None = None) -> Message:
     return Message(
         id="case-spec",
         role="system",
-        parts=[
-            ControlPart(
-                control_type=request["parts"][0]["control_type"],
-                payload=request["parts"][0]["payload"],
-                text=request["parts"][0]["text"],
-            )
-        ],
+        parts=[TextPart(text=request["parts"][0]["text"])],
     )
 
 
@@ -376,9 +370,11 @@ async def test_v3_training_case_spec_fast_path_not_used_with_user_memory_policy(
 @pytest.mark.asyncio
 async def test_v3_training_case_spec_fast_path_rejects_invalid_protocol():
     message = _case_spec_message()
-    assert isinstance(message.parts[0], ControlPart)
-    message.parts[0].payload = dict(message.parts[0].payload or {})
-    message.parts[0].payload["protocol"] = "openviking.batch_train.case_spec.v0"
+    assert isinstance(message.parts[0], TextPart)
+    message.parts[0].text = message.parts[0].text.replace(
+        "openviking.batch_train.case_spec.v1",
+        "openviking.batch_train.case_spec.v0",
+    )
     compressor = SessionCompressorV3(vikingdb=None, rollout_analyzer=SimpleNamespace())
 
     with pytest.raises(ValueError, match="protocol mismatch"):
@@ -392,12 +388,12 @@ async def test_v3_training_case_spec_fast_path_rejects_invalid_protocol():
 def test_training_case_spec_message_uses_fast_path_protocol():
     message = _case_spec_message()
     part = message.parts[0]
-    assert isinstance(part, ControlPart)
+    assert isinstance(part, TextPart)
     text = part.text
 
     assert text.startswith("# OpenViking Batch Training CaseSpec v1")
-    assert part.payload["protocol"] == "openviking.batch_train.case_spec.v1"
-    assert part.payload["case"]["rubric"]["name"] == "duplicate_booking_rubric"
+    assert "openviking.batch_train.case_spec.v1" in text
+    assert "duplicate_booking_rubric" in text
 
 
 @pytest.mark.asyncio

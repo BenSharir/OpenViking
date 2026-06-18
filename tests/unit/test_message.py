@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from openviking.message import ContextPart, ControlPart, ImagePart, Message, TextPart, ToolPart
+from openviking.message import ContextPart, ImagePart, Message, TextPart, ToolPart
 from openviking.message.part import part_from_dict
 
 
@@ -108,22 +108,6 @@ class TestContextPart:
         )
 
         assert part.context_type == "resource"
-
-
-class TestControlPart:
-    """Test ControlPart dataclass."""
-
-    def test_custom_values(self):
-        part = ControlPart(
-            control_type="batch_training_case_spec",
-            payload={"protocol": "v1"},
-            text="human-readable control payload",
-        )
-
-        assert part.type == "control"
-        assert part.control_type == "batch_training_case_spec"
-        assert part.payload == {"protocol": "v1"}
-        assert part.text == "human-readable control payload"
 
 
 class TestImagePart:
@@ -266,23 +250,6 @@ class TestPartFromDict:
         assert part.context_type == "resource"
         assert part.abstract == "Test abstract"
 
-
-    def test_control_part_from_dict(self):
-        """Test creating ControlPart from dict."""
-        data = {
-            "type": "control",
-            "control_type": "batch_training_case_spec",
-            "payload": {"protocol": "v1"},
-            "text": "control text",
-        }
-
-        part = part_from_dict(data)
-
-        assert isinstance(part, ControlPart)
-        assert part.control_type == "batch_training_case_spec"
-        assert part.payload == {"protocol": "v1"}
-        assert part.text == "control text"
-
     def test_tool_part_from_dict(self):
         """Test creating ToolPart from dict."""
         data = {
@@ -356,6 +323,20 @@ class TestPartFromDict:
         assert isinstance(part, TextPart)
         # The entire dict is converted to string
         assert "unknown" in part.text
+
+    def test_unknown_type_with_text_preserves_text(self):
+        """Unknown part types with text degrade to TextPart text."""
+        data = {
+            "type": "control",
+            "control_type": "batch_training_case_spec",
+            "payload": {"protocol": "v1"},
+            "text": "control text",
+        }
+
+        part = part_from_dict(data)
+
+        assert isinstance(part, TextPart)
+        assert part.text == "control text"
 
     def test_missing_type_defaults_to_text(self):
         """Test missing type defaults to TextPart."""
@@ -620,6 +601,28 @@ class TestMessageFromDict:
         assert len(msg.parts) == 1
         assert isinstance(msg.parts[0], TextPart)
         assert msg.parts[0].text == "Hello"
+
+    def test_from_dict_unknown_type_with_text_preserves_text(self):
+        """Unknown serialized part types with text degrade to TextPart."""
+        d = {
+            "id": "msg-control",
+            "role": "system",
+            "parts": [
+                {
+                    "type": "control",
+                    "control_type": "batch_training_case_spec",
+                    "payload": {"protocol": "v1"},
+                    "text": "# OpenViking Batch Training CaseSpec v1",
+                }
+            ],
+            "created_at": "2026-03-26T10:30:00Z",
+        }
+
+        msg = Message.from_dict(d)
+
+        assert len(msg.parts) == 1
+        assert isinstance(msg.parts[0], TextPart)
+        assert msg.parts[0].text == "# OpenViking Batch Training CaseSpec v1"
 
     def test_from_dict_with_context_part(self):
         """Test from_dict with ContextPart."""

@@ -1207,6 +1207,93 @@ async def test_rollout_artifact_recorder_writes_train_rollouts_before_commit(tmp
     assert index["case_groups"][0]["rollouts"][0]["artifact_state"] == "rollout_done"
 
 
+def test_rollout_artifact_recorder_separates_epoch_eval_dirs(tmp_path):
+    from openviking.session.train import RolloutArtifactRecorder
+
+    recorder = RolloutArtifactRecorder(run_dir=tmp_path)
+    case = Case(
+        name="tau2_airline_test_0_t0",
+        task_signature="tau2:airline:test:2:trial:0",
+        input={
+            "data_split": "airline_test",
+            "task_no": 0,
+            "task_id": "2",
+            "eval_trial": 0,
+            "original_case_name": "tau2_airline_test_0",
+        },
+        rubric=Rubric(name="reward", description="reward", criteria=[]),
+    )
+
+    for epoch in (0, 1):
+        rollout = Rollout(
+            case=case,
+            messages=[Message(id=f"m{epoch}", role="user", parts=[TextPart(text="hello")])],
+            policy_snapshot_id=f"snapshot-{epoch}",
+            evaluation=RubricEvaluation(
+                passed=epoch == 1,
+                score=float(epoch == 1),
+                criterion_results=[],
+                feedback=[],
+            ),
+        )
+        recorder.record_eval(
+            label="test_rollout",
+            epoch=epoch,
+            analyses=[
+                RolloutAnalysis(
+                    evaluation=rollout.evaluation,
+                    trajectories=[],
+                    metadata={"rollout": rollout},
+                )
+            ],
+        )
+
+    group_dir = tmp_path / "rollouts" / "airline_test_task_0_2"
+    assert (group_dir / "test_epoch_0" / "trial_0" / "status.json").exists()
+    assert (group_dir / "test_epoch_1" / "trial_0" / "status.json").exists()
+    assert not (group_dir / "test" / "trial_0").exists()
+
+    index = recorder.finalize().to_dict()
+    rollout_stages = [item["stage"] for item in index["case_groups"][0]["rollouts"]]
+    assert rollout_stages == ["test_epoch_0", "test_epoch_1"]
+
+
+def test_rollout_artifact_recorder_keeps_baseline_and_final_eval_dirs(tmp_path):
+    from openviking.session.train import RolloutArtifactRecorder
+
+    recorder = RolloutArtifactRecorder(run_dir=tmp_path)
+    case = Case(
+        name="tau2_airline_test_0_t0",
+        task_signature="tau2:airline:test:2:trial:0",
+        input={
+            "data_split": "airline_test",
+            "task_no": 0,
+            "task_id": "2",
+            "eval_trial": 0,
+        },
+        rubric=Rubric(name="reward", description="reward", criteria=[]),
+    )
+
+    rollout = Rollout(
+        case=case,
+        messages=[Message(id="m", role="user", parts=[TextPart(text="hello")])],
+        policy_snapshot_id="snapshot",
+        evaluation=RubricEvaluation(passed=True, score=1.0, criterion_results=[], feedback=[]),
+    )
+    analysis = RolloutAnalysis(
+        evaluation=rollout.evaluation,
+        trajectories=[],
+        metadata={"rollout": rollout},
+    )
+
+    recorder.record_eval(label="baseline_test_rollout", epoch=-1, analyses=[analysis])
+    recorder.record_eval(label="final_test_rollout", epoch=2, analyses=[analysis])
+
+    group_dir = tmp_path / "rollouts" / "airline_test_task_0_2"
+    assert (group_dir / "baseline_test" / "trial_0" / "status.json").exists()
+    assert (group_dir / "final_test" / "trial_0" / "status.json").exists()
+
+
 def test_rollout_artifact_event_recorder_enriches_commit_result(tmp_path):
     from openviking.session.train import RolloutArtifactEventRecorder, RolloutArtifactRecorder
 
@@ -1329,3 +1416,46 @@ async def test_session_commit_policy_trainer_can_still_use_explicit_timeout():
     commit_result = result.apply_result.metadata["commit_results"][0]
     assert commit_result["task_status"] == "timeout"
     assert commit_result["error"] == "commit task timeout"
+
+
+def test_tau2_case_loader_selects_exact_task_indices(tmp_path: Path, monkeypatch):
+    from benchmark.tau2.train import case_loader as tau2_case_loader
+
+    domain_dir = tmp_path / "domains" / "airline"
+    domain_dir.mkdir(parents=True)
+    (domain_dir / "split_tasks.json").write_text(
+        json.dumps({"train": ["a", "b", "c"], "test": ["x", "y"]}),
+        encoding="utf-8",
+    )
+
+    class Task:
+        def __init__(self, task_id: str) -> None:
+            self.id = task_id
+            self.evaluation_criteria = f"criteria-{task_id}"
+            self.user_scenario = f"scenario-{task_id}"
+
+    monkeypatch.setattr(tau2_case_loader, "_load_tau2_task", lambda _domain, task_id: Task(task_id))
+
+    loader = tau2_case_loader.Tau2CaseLoader(
+        domain="airline",
+        split="train",
+        data_root=str(tmp_path),
+        task_indices=[1],
+    )
+
+    cases = loader.load_cases()
+
+    assert [case.input["task_id"] for case in cases] == ["b"]
+    assert [case.input["task_no"] for case in cases] == [1]
+    assert cases[0].name == "tau2_airline_train_1"
+
+
+def test_tau2_service_filter_parses_task_indices():
+    from benchmark.tau2.train.service_app import _task_indices_from_filters
+
+    assert _task_indices_from_filters({}) is None
+    assert _task_indices_from_filters({"task_indices": [0, "3"]}) == [0, 3]
+    with pytest.raises(ValueError, match="task_indices filter must be a list"):
+        _task_indices_from_filters({"task_indices": 2})
+    with pytest.raises(ValueError, match="task index must be >= 0"):
+        _task_indices_from_filters({"task_indices": [-1]})

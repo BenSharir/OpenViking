@@ -435,14 +435,7 @@ def _case_spec_message_to_request(rollout: Rollout) -> dict[str, Any]:
     )
     return {
         "role": "system",
-        "parts": [
-            {
-                "type": "control",
-                "control_type": "batch_training_case_spec",
-                "payload": _case_spec_payload(rollout),
-                "text": text,
-            }
-        ],
+        "parts": [{"type": "text", "text": text}],
     }
 
 
@@ -488,14 +481,7 @@ def _evaluation_message_to_request(rollout: Rollout) -> dict[str, Any]:
     )
     return {
         "role": "user",
-        "parts": [
-            {
-                "type": "control",
-                "control_type": "batch_training_outcome_evaluation",
-                "payload": {"evaluation": _evaluation_payload(rollout.evaluation)},
-                "text": text,
-            }
-        ],
+        "parts": [{"type": "text", "text": text}],
     }
 
 

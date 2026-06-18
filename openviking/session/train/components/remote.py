@@ -106,7 +106,7 @@ class RemoteRolloutExecutor:
     service_url: str
     options: dict[str, Any] = field(default_factory=dict)
     concurrency: int = 20
-    request_timeout_seconds: float = 60.0
+    request_timeout_seconds: float = 300.0
     poll_interval_seconds: float = 2.0
     execution_timeout_seconds: float = 3600.0
     show_progress: bool = False

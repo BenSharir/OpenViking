@@ -14,11 +14,11 @@ from openviking.session.train.batch_runner import (
 )
 
 
-def test_baseline_cache_key_depends_on_trials_and_eval_limit():
+def test_baseline_cache_key_depends_on_trials_and_eval_index():
     base = BatchTrainEvalConfig(
         dataset="tau2",
         domain="airline",
-        eval_limit=25,
+        eval_index=25,
         trials=8,
         benchmark_service_url="http://127.0.0.1:1944",
     )
@@ -27,7 +27,7 @@ def test_baseline_cache_key_depends_on_trials_and_eval_limit():
         BatchTrainEvalConfig(
             dataset="tau2",
             domain="airline",
-            eval_limit=25,
+            eval_index=25,
             trials=8,
             benchmark_service_url="http://127.0.0.1:1944",
         )
@@ -36,7 +36,7 @@ def test_baseline_cache_key_depends_on_trials_and_eval_limit():
         BatchTrainEvalConfig(
             dataset="tau2",
             domain="airline",
-            eval_limit=25,
+            eval_index=25,
             trials=1,
             benchmark_service_url="http://127.0.0.1:1944",
         )
@@ -45,7 +45,7 @@ def test_baseline_cache_key_depends_on_trials_and_eval_limit():
         BatchTrainEvalConfig(
             dataset="tau2",
             domain="airline",
-            eval_limit=10,
+            eval_index=10,
             trials=8,
             benchmark_service_url="http://127.0.0.1:1944",
         )
@@ -57,7 +57,7 @@ def test_baseline_cache_round_trips_report(tmp_path: Path):
     config = BatchTrainEvalConfig(
         dataset="tau2",
         domain="airline",
-        eval_limit=1,
+        eval_index=1,
         trials=1,
         benchmark_service_url="http://127.0.0.1:1944",
     )
@@ -101,3 +101,52 @@ def test_clean_result_preserves_baseline_cache(tmp_path: Path, monkeypatch):
 
     assert cache_file.exists()
     assert not stale_file.exists()
+
+
+def test_case_loader_uses_sample_index_filter():
+    from openviking.session.train.batch_runner import _case_loader
+
+    config = BatchTrainEvalConfig(
+        dataset="tau2",
+        domain="airline",
+        train_index=7,
+        eval_index=3,
+        benchmark_service_url="http://127.0.0.1:1944",
+    )
+
+    train_loader = _case_loader(config, split="train", sample_index=config.train_index)
+    eval_loader = _case_loader(config, split="test", sample_index=config.eval_index)
+    all_loader = _case_loader(config, split="train", sample_index=None)
+
+    assert train_loader.limit is None
+    assert eval_loader.limit is None
+    assert train_loader.filters == {"task_indices": [7]}
+    assert eval_loader.filters == {"task_indices": [3]}
+    assert all_loader.filters == {}
+
+
+def test_sample_indices_are_zero_based_and_may_be_zero():
+    BatchTrainEvalConfig(
+        dataset="tau2",
+        domain="airline",
+        train_index=0,
+        eval_index=0,
+        benchmark_service_url="http://127.0.0.1:1944",
+    )
+
+    import pytest
+
+    with pytest.raises(ValueError, match="train_index must be >= 0"):
+        BatchTrainEvalConfig(
+            dataset="tau2",
+            domain="airline",
+            train_index=-1,
+            benchmark_service_url="http://127.0.0.1:1944",
+        )
+    with pytest.raises(ValueError, match="eval_index must be >= 0"):
+        BatchTrainEvalConfig(
+            dataset="tau2",
+            domain="airline",
+            eval_index=-1,
+            benchmark_service_url="http://127.0.0.1:1944",
+        )

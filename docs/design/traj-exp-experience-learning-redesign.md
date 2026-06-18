@@ -773,7 +773,7 @@ openviking/session/train/batch_runner.py
 ```bash
 benchmark/tau2/train/run_batch_train_eval.sh \
   --epochs 0 \
-  --eval-limit 25 \
+  --eval-index 24 \
   --trials 8
 ```
 
@@ -783,8 +783,6 @@ benchmark/tau2/train/run_batch_train_eval.sh \
 benchmark/tau2/train/run_batch_train_eval.sh \
   --baseline-eval \
   --epochs 4 \
-  --train-limit 25 \
-  --eval-limit 25 \
   --trials 8
 ```
 
