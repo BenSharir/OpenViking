@@ -1,5 +1,7 @@
 memory_type: trajectories
 description: |
+  输出语言硬约束：生成的 memory 必须使用中文，不受对话语言或 {{ language }} 影响。所有自然语言字段都必须用中文，包括名称、检索锚点、摘要、要点和分析内容。固定 schema 标题、工具名、API/function 名、evaluation 字段名、enum 值、代码标识符和必要的引用字面量可保留原文。
+
   A compact, reusable operation contract distilled from an agent task trajectory.
 
   Extract when the agent worked through identifiable tasks involving decisions, tool calls, or multi-step actions.
@@ -21,10 +23,10 @@ fields:
     type: string
     description: |
       Name the task directly and stably.
-      Must be written in {{ language }}.
-      {% if language == 'en' %}Use lowercase snake_case, max 5 words.{% else %}Use a concise noun phrase, max 15 characters.{% endif %}
+      Must be written in Chinese (中文), regardless of {{ language }}.
+      Use a concise Chinese noun phrase, max 15 Chinese characters.
       Do not create near-duplicate names for the same task.
-      Good: "duplicate_request_resolution", "async_task_hang_fix", "重复请求处理".
+      Good: "重复请求处理", "异步任务挂起修复", "补偿对象错绑".
       Prefer the reusable operation or decision boundary over raw instance wording from the opening request.
     merge_op: immutable
 
@@ -38,6 +40,7 @@ fields:
     type: string
     description: |
       Positive semantic retrieval text for this rollout analysis, written for embedding rather than display.
+      Use Chinese (中文) for natural-language portions, while keeping the fixed labels, enum values, tool names, and evaluation field names unchanged.
       Format: "Stage: <opening|after_read|before_write|after_write|terminal_handoff|final_response|evaluation_failure|evaluation_success>; Failure mode: <none, missing expected action, wrong target, wrong args, premature handoff/done, policy mismatch, or other>; Capability: <future operation/check this record should guide>; Target: <primary object or write/read boundary>."
 
       Rules:
@@ -51,7 +54,7 @@ fields:
   - name: content
     type: string
     description: |
-      Eval-oriented rollout trajectory analysis in EXACTLY this format. Prefer {{ language }} for prose, while keeping the section titles exactly as written below.
+      Eval-oriented rollout trajectory analysis in EXACTLY this format. Use Chinese (中文) for all natural-language prose, while keeping the section titles exactly as written below.
 
       # 结论
       <one concise sentence explaining the core success/failure/partial outcome. For failures, name the missed expected action, wrong object binding, wrong parameter, premature handoff/termination, or other primary failure.>

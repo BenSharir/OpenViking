@@ -1,5 +1,7 @@
 memory_type: experiences
 description: |
+  输出语言硬约束：生成的 memory 必须使用中文，不受对话语言或 {{ language }} 影响。所有自然语言字段都必须用中文，包括名称、检索锚点、摘要、要点和分析内容。固定 schema 标题、工具名、API/function 名、evaluation 字段名、enum 值、代码标识符和必要的引用字面量可保留原文。
+
   A generalizable, reusable insight distilled from agent execution — not a process record.
   Captures a transferable pattern: what situation triggers it, what approach works, and why.
 
@@ -14,15 +16,15 @@ fields:
     type: string
     description: |
       Name the generalizable pattern, not the specific instance.
-      Must be written in {{ language }}.
-      {% if language == 'en' %}Use lowercase snake_case, max 5 words.{% else %}Use a concise noun phrase, max 15 characters.{% endif %}
-      Good: "booking_duplicate_handling", "pytest_asyncio_cancel_hang_fix", "重复预订处理".
+      Must be written in Chinese (中文), regardless of {{ language }}.
+      Use a concise Chinese noun phrase, max 15 Chinese characters.
+      Good: "重复预订处理", "异步测试挂起修复", "补偿对象校验".
     merge_op: immutable
 
   - name: content
     type: string
     description: |
-      Structured experience extraction in EXACTLY this 3-section format. This output will be injected directly into an autonomous agent's system prompt, so it MUST be written as strict, executable machine instructions:
+      Structured experience extraction in EXACTLY this 3-section format. Use Chinese (中文) for all natural-language prose while keeping the section titles exactly as written below. This output will be injected directly into an autonomous agent's system prompt, so it MUST be written as strict, executable machine instructions:
 
       ## Situation
       <markdown bullets: Entry Conditions. Describe the generalized context, user intent, or overarching scenario that dictates when this entire rule block becomes relevant>
@@ -49,7 +51,7 @@ fields:
   - name: supersedes
     type: string
     description: |
-      The experience_name of an existing experience that this one supersedes.
+      The experience_name of an existing experience that this one supersedes; this field should also be Chinese (中文) when populated.
       Set ONLY when this experience replaces a narrower existing experience with a DIFFERENT name.
       The system will automatically delete the old experience and inherit its trajectory history.
       Leave empty for a new experience or when updating an experience with the same name.
