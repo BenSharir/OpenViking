@@ -253,8 +253,6 @@ class ConsolePipelineReporter(NoopPipelineLifecycleHook):
                         _accuracy_style(report.get("accuracy_mean")),
                     ),
                     ("", f"± {fmt_percentage_point_abs(report.get('accuracy_std'))}", "yellow"),
-                    ("avg_reward", fmt_score(report.get("average_reward_mean")), "bold"),
-                    ("", f"± {fmt_score(report.get('average_reward_std'))}", "yellow"),
                     *_cost_field(report),
                 ],
             )
@@ -278,7 +276,6 @@ class ConsolePipelineReporter(NoopPipelineLifecycleHook):
                     f"{report['passed_count']}/{report['case_count']}",
                     _passed_style(report),
                 ),
-                ("avg_reward", fmt_score(report["average_reward"]), "bold"),
                 *_cost_field(report),
             ],
         )
@@ -321,7 +318,6 @@ class ConsolePipelineReporter(NoopPipelineLifecycleHook):
                     f"{report['passed_count']}/{report['case_count']}",
                     _passed_style(report),
                 ),
-                ("avg_reward", fmt_score(report["average_reward"]), "bold"),
                 *_cost_field(report),
             ],
         )
@@ -472,17 +468,12 @@ class ConsolePipelineReporter(NoopPipelineLifecycleHook):
                 f"(trials={trial_count}, "
                 f"cases_per_trial={data.get('case_count_per_trial') or 'varies'})"
             )
-            print(
-                f"{label} average reward: {fmt_score(data.get('average_reward_mean'))} ± "
-                f"{fmt_score(data.get('average_reward_std'))}"
-            )
             return
         print(
             f"{label} accuracy: "
             f"{fmt_percent(data['accuracy'])} "
             f"({data['passed_count']}/{data['case_count']})"
         )
-        print(f"{label} average reward: {fmt_score(data['average_reward'])}")
 
 
 def _cost_field(report: dict[str, Any]) -> list[tuple[str, str, str]]:
@@ -562,14 +553,12 @@ def _train_summary_fragments(data: dict[str, Any]) -> list[tuple[str, str]]:
     accuracy = data.get("accuracy")
     passed = data.get("passed_count")
     total = data.get("case_count")
-    avg_reward = data.get("average_reward")
     fragments = [
         ("TRAIN accuracy: ", "bold"),
         (fmt_percent(accuracy), _accuracy_style(accuracy)),
     ]
     if passed is not None and total is not None:
         fragments.extend([("  passed=", "default"), (f"{passed}/{total}", _passed_style(data))])
-    fragments.extend([("  avg_reward=", "default"), (fmt_score(avg_reward), "bold")])
     return fragments
 
 
@@ -582,10 +571,6 @@ def _test_summary_fragments(data: dict[str, Any]) -> list[tuple[str, str]]:
             (fmt_percent(accuracy), _accuracy_style(accuracy)),
             (" ± ", "default"),
             (fmt_percentage_point_abs(data.get("accuracy_std")), "yellow"),
-            ("  avg_reward=", "default"),
-            (fmt_score(data.get("average_reward_mean")), "bold"),
-            (" ± ", "default"),
-            (fmt_score(data.get("average_reward_std")), "yellow"),
             ("  trials=", "default"),
             (str(trial_count), "cyan"),
         ]
@@ -597,8 +582,6 @@ def _test_summary_fragments(data: dict[str, Any]) -> list[tuple[str, str]]:
         (fmt_percent(accuracy), _accuracy_style(accuracy)),
         ("  passed=", "default"),
         (f"{data.get('passed_count')}/{data.get('case_count')}", _passed_style(data)),
-        ("  avg_reward=", "default"),
-        (fmt_score(data.get("average_reward")), "bold"),
     ]
     return fragments
 

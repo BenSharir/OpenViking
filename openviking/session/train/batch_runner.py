@@ -532,13 +532,10 @@ def _print_baseline_cache_hit(report: dict[str, Any], cache_path: Path) -> None:
     if trial_count > 1:
         accuracy_mean = report.get("accuracy_mean")
         accuracy_std = report.get("accuracy_std")
-        reward_mean = report.get("average_reward_mean")
-        reward_std = report.get("average_reward_std")
         cases_per_trial = report.get("case_count_per_trial") or "varies"
         print(
             f"[baseline_test_rollout] baseline_cache_hit=1 accuracy="
             f"{_fmt_percent(accuracy_mean)} ± {_fmt_pp_abs(accuracy_std)} "
-            f"avg_reward={_fmt_score(reward_mean)} ± {_fmt_score(reward_std)} "
             f"trials={trial_count} cases_per_trial={cases_per_trial}"
             f"{cache_info}"
         )
@@ -546,10 +543,9 @@ def _print_baseline_cache_hit(report: dict[str, Any], cache_path: Path) -> None:
     accuracy = report.get("accuracy")
     passed = report.get("passed_count")
     total = report.get("case_count")
-    avg_reward = report.get("average_reward")
     print(
         f"[baseline_test_rollout] baseline_cache_hit=1 accuracy={_fmt_percent(accuracy)} "
-        f"passed={passed}/{total} avg_reward={_fmt_score(avg_reward)}"
+        f"passed={passed}/{total}"
         f"{cache_info}"
     )
 
@@ -564,13 +560,6 @@ def _fmt_pp_abs(value: Any) -> str:
     if value is None:
         return "n/a"
     return f"{float(value) * 100:.2f}pp"
-
-
-def _fmt_score(value: Any) -> str:
-    if value is None:
-        return "n/a"
-    return f"{float(value):.6f}"
-
 
 
 def _build_pipeline(
