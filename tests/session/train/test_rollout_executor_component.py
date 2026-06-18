@@ -275,7 +275,7 @@ def test_tau2_litellm_generate_rate_limit_retry_patch(monkeypatch):
 
     def fake_generate():
         calls["count"] += 1
-        if calls["count"] < 3:
+        if calls["count"] < 5:
             raise RuntimeError("TPM (Tokens Per Minute) limit of the model is exceeded")
         return "ok"
 
@@ -296,15 +296,14 @@ def test_tau2_litellm_generate_rate_limit_retry_patch(monkeypatch):
         raise ImportError(name)
 
     monkeypatch.setattr(tau2_environment.importlib, "import_module", fake_import_module)
-    monkeypatch.setattr(tau2_environment, "_tau2_rate_limit_max_retries", lambda: 3)
     monkeypatch.setattr(tau2_environment, "_tau2_rate_limit_retry_delay", lambda attempt: attempt)
     monkeypatch.setattr(tau2_environment.time, "sleep", lambda delay: sleeps.append(delay))
 
     tau2_environment._install_tau2_litellm_rate_limit_retry()
 
     assert FakeLLMUtils.generate() == "ok"
-    assert calls["count"] == 3
-    assert sleeps == [1, 2]
+    assert calls["count"] == 5
+    assert sleeps == [1, 2, 3, 4]
     assert FakeUserSimulator.generate is FakeLLMUtils.generate
 
 
