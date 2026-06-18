@@ -16,7 +16,44 @@ bash bot/scripts/restart_openviking_server.sh
 
 Default server URL is `http://127.0.0.1:1933`, configured in `~/.openviking/ov.conf`.
 
-## 1. Start the Tau2 service
+## 1. One-click vikingbot train/eval
+
+For the common full VikingBot path, use the one-click launcher. It restarts
+OpenViking, waits for the bot proxy health endpoint, starts the Tau2 rollout
+service with `--rollout-backend vikingbot`, waits for service `/health`, and
+then starts batch train/eval.
+
+```bash
+bash benchmark/tau2/train/restart_vikingbot_train_eval.sh
+```
+
+Default train/eval arguments are:
+
+```bash
+--commit-concurrency 100 --epochs 2 --trials 8 --skip-final-eval
+```
+
+Any arguments passed to `restart_vikingbot_train_eval.sh` replace those
+default train/eval arguments. For example, to keep 10 previous run directories:
+
+```bash
+bash benchmark/tau2/train/restart_vikingbot_train_eval.sh \
+  --epochs 2 \
+  --trials 8 \
+  --skip-final-eval \
+  --keep-recent-results 10
+```
+
+The launcher writes service logs and pid files under:
+
+```text
+result/tau2/train/service_logs/
+```
+
+OpenViking readiness is checked at `http://127.0.0.1:1933/bot/v1/health`;
+the Tau2 service readiness check is `http://127.0.0.1:1944/health`.
+
+## 2. Start the Tau2 service manually
 
 ```bash
 bash benchmark/tau2/train/run_service.sh --host 127.0.0.1 --port 1944
@@ -49,7 +86,7 @@ bash benchmark/tau2/train/run_service.sh \
 The batch runner does **not** send a backend choice — it always uses whatever
 the service is configured with.
 
-## 2. Pre-run test score only
+## 3. Pre-run test score only
 
 Use `--epochs 0` to run final test evaluation without training:
 
@@ -60,13 +97,15 @@ bash benchmark/tau2/train/run_batch_train_eval.sh \
   --trials 8
 ```
 
-## 3. Train with a cached pre-training test score
+## 4. Train with a cached pre-training test score
 
 The runner evaluates the test split before training automatically. For the same
 dataset/domain, `--eval-index`, `--trials`, and rollout options, this baseline is
-cached under `result/tau2/train/cache/baseline/` and reused by later runs. Use
-`--force-baseline-recompute` to refresh it. The Tau2 wrapper also runs a test
-rollout after each training epoch so you can track held-out score progression.
+cached under `result/tau2/train/cache/baseline/` and reused by later runs. Normal
+runs do not recompute the baseline when this cache hits; pass
+`--force-baseline-recompute` only when you intentionally want to refresh it. The
+Tau2 wrapper also runs a test rollout after each training epoch so you can track
+held-out score progression.
 
 ```bash
 bash benchmark/tau2/train/run_batch_train_eval.sh \
@@ -74,7 +113,7 @@ bash benchmark/tau2/train/run_batch_train_eval.sh \
   --trials 8
 ```
 
-## 4. Defaults and options
+## 5. Defaults and options
 
 `benchmark/tau2/train/run_batch_train_eval.sh` is a Tau2 convenience wrapper for:
 
@@ -90,8 +129,9 @@ Default concurrency and output behavior:
 - rollout concurrency: `150`
 - session.commit concurrency: `100`
 - eval trials: `8`
-- `--clean-result` is enabled by default and clears previous `result/tau2/train/` run artifacts before each run, while preserving `result/tau2/train/cache/`. Use `--no-clean-result` to keep previous runs.
-- Streaming JSONL events are written to `result/tau2/train/<domain>_<timestamp>/events.jsonl`; train commit events include `trace_id` for live `tail -f` debugging. Use `--events-output` to override the path.
+- `--clean-result` is enabled by default and keeps the most recent 5 `result/tau2/train/run_<domain>_<timestamp>/` run directories while preserving `result/tau2/train/cache/` and all non-`run_` directories such as `result/tau2/train/opt/`. Use `--keep-recent-results N` to change the retention count, or `--no-clean-result` to keep all previous runs.
+- `--skip-final-eval` skips the extra final held-out eval pass. The one-click launcher enables this by default because the Tau2 wrapper already enables `--eval-each-epoch`.
+- Streaming JSONL events are written to `result/tau2/train/run_<domain>_<timestamp>/events.jsonl`; train commit events include `trace_id` for live `tail -f` debugging. Use `--events-output` to override the path.
 
 ### Common options
 
@@ -108,7 +148,9 @@ Default concurrency and output behavior:
 | `--max-iterations` | `30` | Max steps per rollout |
 | `--force-baseline-recompute` | off | Recompute cached pre-training test baseline instead of reusing it |
 | `--eval-each-epoch` | on in Tau2 wrapper | Run held-out eval after every training epoch |
-| `--clean-result` / `--no-clean-result` | clean | Whether to wipe previous result artifacts |
+| `--skip-final-eval` | off; on in one-click launcher | Skip the extra final held-out eval pass |
+| `--clean-result` / `--no-clean-result` | clean | Whether to prune previous result artifacts |
+| `--keep-recent-results` | `5` | Number of recent default `run_` directories to keep when cleaning; cache and non-`run_` directories are preserved |
 | `--output` | auto | JSON report output path |
 | `--events-output` | auto | Streaming JSONL event output path |
 | `--benchmark-service-url` | `http://127.0.0.1:1944` | Benchmark runtime service URL |
@@ -141,12 +183,12 @@ bash benchmark/tau2/train/run_batch_train_eval.sh \
   --trials 8
 ```
 
-## 5. Result and rollout artifacts
+## 6. Result and rollout artifacts
 
 By default each run writes artifacts under the repository-level result directory:
 
 ```text
-result/tau2/train/<domain>_<timestamp>/
+result/tau2/train/run_<domain>_<timestamp>/
   report.json
   rollouts_index.json
   rollouts/

@@ -105,25 +105,23 @@ echo ""
 echo "Step 3: Waiting for server to be ready..."
 sleep 3
 
-# First check if server is responding at all
+# First check if bot proxy health reports healthy
 for i in {1..10}; do
-    if curl -s http://localhost:"$PORT"/api/v1/bot/health > /dev/null 2>&1; then
+    health_response=$(curl -fsS http://localhost:"$PORT"/bot/v1/health 2>/dev/null || true)
+    if echo "${health_response//[[:space:]]/}" | grep -q '"status":"healthy"'; then
         echo ""
         echo "=========================================="
         echo "✓ OpenViking Server started successfully!"
         echo "=========================================="
         echo ""
         echo "Server URL: http://localhost:$PORT"
-        echo "Health Check: http://localhost:$PORT/api/v1/bot/health"
+        echo "Health Check: http://localhost:$PORT/bot/v1/health"
         echo "Logs: tail -f /tmp/openviking-server.log"
         echo ""
         exit 0
     fi
     # Check actual health response
-    health_response=$(curl -s http://localhost:"$PORT"/api/v1/bot/health 2>/dev/null)
-    if echo "$health_response" | grep -q "Vikingbot"; then
-        echo "  ✓ Vikingbot is healthy"
-    elif echo "$health_response" | grep -q "Bot service unavailable"; then
+    if echo "$health_response" | grep -q "Bot service unavailable"; then
         echo "  ⏳ Waiting for Vikingbot to start (attempt $i/10)..."
     fi
     sleep 2

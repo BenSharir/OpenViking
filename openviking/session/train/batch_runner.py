@@ -66,8 +66,10 @@ class BatchTrainEvalConfig:
     benchmark_service_url: str | None = None
     baseline_force_recompute: bool = False
     eval_each_epoch: bool = False
+    skip_final_eval: bool = False
     trials: int = 8
     clean_result: bool = True
+    keep_recent_results: int = 5
     events_path: str | None = None
     run_timestamp: str = field(default_factory=lambda: datetime.now().strftime("%Y%m%d_%H%M%S"))
 
@@ -98,6 +100,8 @@ class BatchTrainEvalConfig:
             raise ValueError("trials must be > 0")
         if self.benchmark_service_url is not None and not self.benchmark_service_url.strip():
             raise ValueError("benchmark_service_url must not be empty")
+        if self.keep_recent_results < 0:
+            raise ValueError("keep_recent_results must be >= 0")
 
 
 @dataclass(slots=True)
@@ -129,10 +133,13 @@ class BatchTrainEvalReport:
     rollouts_index_path: str | None = None
     latest_failed_rollout: str | None = None
     clean_result: bool = True
+    keep_recent_results: int = 5
     events_path: str | None = None
     baseline_cache_path: str | None = None
     baseline_cache_hit: bool = False
     baseline_force_recompute: bool = False
+    skip_final_eval: bool = False
+    final_eval_source: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -161,10 +168,13 @@ class BatchTrainEvalReport:
             "rollouts_index_path": self.rollouts_index_path,
             "latest_failed_rollout": self.latest_failed_rollout,
             "clean_result": self.clean_result,
+            "keep_recent_results": self.keep_recent_results,
             "events_path": self.events_path,
             "baseline_cache_path": self.baseline_cache_path,
             "baseline_cache_hit": self.baseline_cache_hit,
             "baseline_force_recompute": self.baseline_force_recompute,
+            "skip_final_eval": self.skip_final_eval,
+            "final_eval_source": self.final_eval_source,
         }
 
 
@@ -202,7 +212,9 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             eval_index=config.eval_index,
             trials=config.trials,
             clean_result=config.clean_result,
+            keep_recent_results=config.keep_recent_results,
             baseline_force_recompute=config.baseline_force_recompute,
+            skip_final_eval=config.skip_final_eval,
             baseline_cache_path=str(_baseline_cache_path(config)),
         )
         policy_trainer = SessionCommitPolicyTrainer(
@@ -287,7 +299,13 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
         # Note: per-epoch rollout artifacts are written incrementally via the
         # rollout_artifact_recorder lifecycle hook registered on train_context.
 
-        if await test_loader.split_exists():
+        epoch_eval_reports = _epoch_eval_reports(train_result)
+        final_eval_source: str | None = None
+        if config.skip_final_eval:
+            if epoch_eval_reports:
+                final_eval = dict(epoch_eval_reports[-1])
+                final_eval_source = "last_epoch_eval"
+        elif await test_loader.split_exists():
             final_result = await pipeline.eval(
                 case_loader=test_loader,
                 policy_set=policy_set,
@@ -309,6 +327,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
                 analyses=final_result.analyses,
             )
             final_eval = final_result.metadata["report"]
+            final_eval_source = "final_test"
 
         accuracy_delta = report_builder.accuracy_delta(baseline_eval, final_eval)
         rollout_artifact_index = rollout_artifact_recorder.finalize()
@@ -324,7 +343,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             policy_root_uri=policy_root_uri,
             baseline_eval=baseline_eval,
             train_epochs=list(train_result.metadata.get("train_reports", [])),
-            epoch_evals=_epoch_eval_reports(train_result),
+            epoch_evals=epoch_eval_reports,
             final_eval=final_eval,
             accuracy_delta=accuracy_delta,
             output_path=_default_output_path(config),
@@ -338,10 +357,13 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             rollouts_index_path=str(run_dir / "rollouts_index.json"),
             latest_failed_rollout=rollout_artifact_index.latest_failed_rollout,
             clean_result=config.clean_result,
+            keep_recent_results=config.keep_recent_results,
             events_path=str(_events_path(config)),
             baseline_cache_path=str(baseline_cache_path),
             baseline_cache_hit=baseline_cache_hit,
             baseline_force_recompute=config.baseline_force_recompute,
+            skip_final_eval=config.skip_final_eval,
+            final_eval_source=final_eval_source,
         )
         _write_report(report, config)
         await event_recorder.record(
@@ -367,6 +389,8 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
                 "run_id": policy_trainer.run_id,
                 "trace_id": report.trace_id,
                 "baseline_cache_hit": report.baseline_cache_hit,
+                "skip_final_eval": report.skip_final_eval,
+                "final_eval_source": report.final_eval_source,
             },
             baseline_eval=baseline_eval,
             final_eval=final_eval,
@@ -747,23 +771,50 @@ def _clean_result_dir(config: BatchTrainEvalConfig) -> None:
         return
 
     result_dir = _result_base_dir(config)
+    result_dir.mkdir(parents=True, exist_ok=True)
+
+    protected_names = {_run_dir_name(config)}
+    run_dirs = []
+    removed = 0
     if result_dir.exists():
         for child in result_dir.iterdir():
-            if child.name == "cache":
+            if child.name in protected_names:
                 continue
-            if child.is_symlink() or child.is_file():
-                child.unlink()
-            elif child.is_dir():
-                shutil.rmtree(child)
-    result_dir.mkdir(parents=True, exist_ok=True)
-    print(f"[batch-train-eval] clean_result=1 path={result_dir}", flush=True)
+            if child.is_dir() and not child.is_symlink():
+                if _is_default_run_dir(child, config):
+                    run_dirs.append(child)
+                continue
+
+    run_dirs.sort(key=lambda path: (path.stat().st_mtime, path.name), reverse=True)
+    keep_count = config.keep_recent_results
+    for stale_dir in run_dirs[keep_count:]:
+        shutil.rmtree(stale_dir)
+        removed += 1
+
+    print(
+        f"[batch-train-eval] clean_result=1 path={result_dir} "
+        f"keep_recent_results={keep_count} removed={removed}",
+        flush=True,
+    )
+
+
+def _is_default_run_dir(path: Path, config: BatchTrainEvalConfig) -> bool:
+    prefix = f"run_{config.domain}_"
+    if not path.name.startswith(prefix):
+        return False
+    suffix = path.name[len(prefix) :]
+    return len(suffix) == 15 and suffix[8] == "_" and suffix[:8].isdigit() and suffix[9:].isdigit()
+
+
+def _run_dir_name(config: BatchTrainEvalConfig) -> str:
+    return f"run_{config.domain}_{config.run_timestamp}"
 
 
 def _run_output_dir(config: BatchTrainEvalConfig) -> Path:
     if config.output_path:
         output_path = Path(config.output_path).expanduser()
         return output_path.parent
-    return _result_base_dir(config) / f"{config.domain}_{config.run_timestamp}"
+    return _result_base_dir(config) / _run_dir_name(config)
 
 
 def _result_base_dir(config: BatchTrainEvalConfig) -> Path:

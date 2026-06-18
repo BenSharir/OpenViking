@@ -85,11 +85,11 @@ def test_clean_result_preserves_baseline_cache(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(batch_runner, "_repo_root", lambda: tmp_path)
     result_dir = tmp_path / "result" / "tau2" / "train"
     cache_file = result_dir / "cache" / "baseline" / "baseline.json"
-    stale_file = result_dir / "airline_old" / "report.json"
+    top_level_file = result_dir / "latest_rollouts"
     cache_file.parent.mkdir(parents=True)
-    stale_file.parent.mkdir(parents=True)
+    top_level_file.parent.mkdir(parents=True, exist_ok=True)
     cache_file.write_text("{}", encoding="utf-8")
-    stale_file.write_text("{}", encoding="utf-8")
+    top_level_file.write_text("{}", encoding="utf-8")
 
     _clean_result_dir(
         BatchTrainEvalConfig(
@@ -100,7 +100,89 @@ def test_clean_result_preserves_baseline_cache(tmp_path: Path, monkeypatch):
     )
 
     assert cache_file.exists()
-    assert not stale_file.exists()
+    assert top_level_file.exists()
+
+
+def test_clean_result_preserves_non_run_dirs(tmp_path: Path, monkeypatch):
+    import openviking.session.train.batch_runner as batch_runner
+
+    monkeypatch.setattr(batch_runner, "_repo_root", lambda: tmp_path)
+    result_dir = tmp_path / "result" / "tau2" / "train"
+    opt_file = result_dir / "opt" / "checkpoint.json"
+    top_level_file = result_dir / "notes.json"
+    opt_file.parent.mkdir(parents=True)
+    opt_file.write_text("{}", encoding="utf-8")
+    top_level_file.parent.mkdir(parents=True, exist_ok=True)
+    top_level_file.write_text("{}", encoding="utf-8")
+
+    _clean_result_dir(
+        BatchTrainEvalConfig(
+            dataset="tau2",
+            domain="airline",
+            benchmark_service_url="http://127.0.0.1:1944",
+        )
+    )
+
+    assert opt_file.exists()
+    assert top_level_file.exists()
+
+
+def test_clean_result_keeps_recent_run_dirs(tmp_path: Path, monkeypatch):
+    import os
+
+    import openviking.session.train.batch_runner as batch_runner
+
+    monkeypatch.setattr(batch_runner, "_repo_root", lambda: tmp_path)
+    result_dir = tmp_path / "result" / "tau2" / "train"
+    cache_file = result_dir / "cache" / "baseline" / "baseline.json"
+    cache_file.parent.mkdir(parents=True)
+    cache_file.write_text("{}", encoding="utf-8")
+
+    legacy_run_dir = result_dir / "airline_20260101_000000"
+    legacy_run_dir.mkdir(parents=True)
+    (legacy_run_dir / "report.json").write_text("{}", encoding="utf-8")
+
+    prefixed_non_run_dir = result_dir / "run_notes"
+    prefixed_non_run_dir.mkdir(parents=True)
+    (prefixed_non_run_dir / "note.txt").write_text("{}", encoding="utf-8")
+
+    for index in range(7):
+        run_dir = result_dir / f"run_airline_20260101_00000{index}"
+        run_dir.mkdir(parents=True)
+        (run_dir / "report.json").write_text("{}", encoding="utf-8")
+        os.utime(run_dir, (1000 + index, 1000 + index))
+
+    _clean_result_dir(
+        BatchTrainEvalConfig(
+            dataset="tau2",
+            domain="airline",
+            benchmark_service_url="http://127.0.0.1:1944",
+            keep_recent_results=5,
+            run_timestamp="20260101_999999",
+        )
+    )
+
+    remaining = sorted(path.name for path in result_dir.iterdir() if path.is_dir())
+
+    assert "cache" in remaining
+    assert "airline_20260101_000000" in remaining
+    assert "run_notes" in remaining
+    assert "run_airline_20260101_000000" not in remaining
+    assert "run_airline_20260101_000001" not in remaining
+    assert "run_airline_20260101_000002" in remaining
+    assert "run_airline_20260101_000006" in remaining
+
+
+def test_keep_recent_results_must_be_non_negative():
+    import pytest
+
+    with pytest.raises(ValueError, match="keep_recent_results must be >= 0"):
+        BatchTrainEvalConfig(
+            dataset="tau2",
+            domain="airline",
+            benchmark_service_url="http://127.0.0.1:1944",
+            keep_recent_results=-1,
+        )
 
 
 def test_case_loader_uses_sample_index_filter():

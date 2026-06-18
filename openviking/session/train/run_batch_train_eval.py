@@ -84,10 +84,28 @@ def parse_args() -> argparse.Namespace:
         help="Run held-out eval after every training epoch. Disabled by default.",
     )
     parser.add_argument(
+        "--skip-final-eval",
+        action="store_true",
+        help=(
+            "Skip the final held-out eval pass. When --eval-each-epoch is enabled, "
+            "the last epoch eval is reused as final_eval in the report."
+        ),
+    )
+    parser.add_argument(
         "--trials",
         type=int,
         default=8,
         help="Run each eval split N times and aggregate (default: 8).",
+    )
+    parser.add_argument(
+        "--keep-recent-results",
+        type=int,
+        default=5,
+        help=(
+            "When --clean-result is enabled, keep the most recent N default run_ "
+            "directories for the same domain while preserving cache/ and non-run_ "
+            "directories (default: 5)."
+        ),
     )
     clean_group = parser.add_mutually_exclusive_group()
     clean_group.add_argument(
@@ -135,8 +153,10 @@ async def main_async() -> int:
             benchmark_service_url=args.benchmark_service_url,
             baseline_force_recompute=args.force_baseline_recompute,
             eval_each_epoch=args.eval_each_epoch,
+            skip_final_eval=args.skip_final_eval,
             trials=args.trials,
             clean_result=args.clean_result,
+            keep_recent_results=args.keep_recent_results,
         )
     )
     return 1 if any(epoch.get("errors") for epoch in report.train_epochs) else 0
