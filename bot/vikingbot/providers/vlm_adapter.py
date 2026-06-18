@@ -5,6 +5,8 @@ LLMProvider interface, so that bot.agents.provider / bot.agents.model
 configuration semantics are consistent with openviking server's vlm section.
 """
 
+import asyncio
+import random
 import time
 from collections.abc import AsyncIterator
 from typing import Any
@@ -22,6 +24,50 @@ from vikingbot.providers.base import (
     stream_delta_value,
 )
 from vikingbot.utils.tracing import get_current_response_id
+
+_RETRYABLE_RATE_LIMIT_MARKERS = (
+    "429",
+    "TooManyRequests",
+    "RateLimitExceeded",
+    "ModelAccountTpmRateLimitExceeded",
+    "TPM (Tokens Per Minute) limit",
+    "RPM (Requests Per Minute) limit",
+    "rate limit",
+    "rate_limit",
+)
+_NON_RETRYABLE_MARKERS = (
+    "AccountQuotaExceeded",
+    "InsufficientQuota",
+    "AuthenticationError",
+    "401",
+    "Unauthorized",
+    "PermissionDenied",
+    "403",
+    "InvalidAuthentication",
+    "InvalidRequest",
+    "invalid_request",
+    "context_length_exceeded",
+)
+_RETRY_BASE_DELAY_SECONDS = 5.0
+_RETRY_MAX_DELAY_SECONDS = 120.0
+
+
+def _is_retryable_rate_limit_error(exc: Exception) -> bool:
+    text = str(exc or "")
+    if not text:
+        return False
+    lower_text = text.lower()
+    if any(marker.lower() in lower_text for marker in _NON_RETRYABLE_MARKERS):
+        return False
+    return any(marker.lower() in lower_text for marker in _RETRYABLE_RATE_LIMIT_MARKERS)
+
+
+def _rate_limit_retry_delay(attempt: int) -> float:
+    delay = min(
+        _RETRY_MAX_DELAY_SECONDS,
+        _RETRY_BASE_DELAY_SECONDS * (2 ** max(0, attempt - 1)),
+    )
+    return delay * random.uniform(0.8, 1.2)
 
 
 class VLMProviderAdapter(LLMProvider):
@@ -79,11 +125,27 @@ class VLMProviderAdapter(LLMProvider):
                         )
 
             # --- Call VLM backend ---
-            result = await self._vlm.get_completion_async(
-                messages=messages,
-                tools=tools,
-                tool_choice="auto" if tools else None,
-            )
+            attempt = 1
+            while True:
+                try:
+                    result = await self._vlm.get_completion_async(
+                        messages=messages,
+                        tools=tools,
+                        tool_choice="auto" if tools else None,
+                    )
+                    break
+                except Exception as e:
+                    if not _is_retryable_rate_limit_error(e):
+                        raise
+                    delay = _rate_limit_retry_delay(attempt)
+                    logger.warning(
+                        "VLM adapter chat rate limited; retrying attempt={} delay={:.1f}s error={}",
+                        attempt,
+                        delay,
+                        e,
+                    )
+                    await asyncio.sleep(delay)
+                    attempt += 1
 
             llm_response = self._convert_response(result)
 
@@ -159,60 +221,79 @@ class VLMProviderAdapter(LLMProvider):
         tool_calls: dict[int, dict[str, Any]] = {}
         finish_reason = "stop"
         usage: dict[str, int] = {}
-        start_time = time.perf_counter()
 
-        try:
-            client = self._vlm.get_async_client()
-            response = await client.chat.completions.create(**kwargs)
-            async for chunk in response:
-                chunk_usage = self._parse_usage(getattr(chunk, "usage", None))
-                if chunk_usage:
-                    usage = chunk_usage
+        attempt = 1
+        while True:
+            content_parts.clear()
+            reasoning_parts.clear()
+            tool_calls.clear()
+            finish_reason = "stop"
+            usage = {}
+            start_time = time.perf_counter()
+            try:
+                client = self._vlm.get_async_client()
+                response = await client.chat.completions.create(**kwargs)
+                async for chunk in response:
+                    chunk_usage = self._parse_usage(getattr(chunk, "usage", None))
+                    if chunk_usage:
+                        usage = chunk_usage
 
-                choices = getattr(chunk, "choices", None) or []
-                if not choices:
-                    continue
-                choice = choices[0]
-                if getattr(choice, "finish_reason", None):
-                    finish_reason = choice.finish_reason or finish_reason
-                delta = getattr(choice, "delta", None)
-                if delta is None:
-                    continue
+                    choices = getattr(chunk, "choices", None) or []
+                    if not choices:
+                        continue
+                    choice = choices[0]
+                    if getattr(choice, "finish_reason", None):
+                        finish_reason = choice.finish_reason or finish_reason
+                    delta = getattr(choice, "delta", None)
+                    if delta is None:
+                        continue
 
-                reasoning_delta = stream_delta_value(delta, "reasoning_content")
-                if reasoning_delta:
-                    reasoning_parts.append(reasoning_delta)
-                    yield LLMStreamEvent(type="reasoning_delta", content=reasoning_delta)
+                    reasoning_delta = stream_delta_value(delta, "reasoning_content")
+                    if reasoning_delta:
+                        reasoning_parts.append(reasoning_delta)
+                        yield LLMStreamEvent(type="reasoning_delta", content=reasoning_delta)
 
-                content_delta = stream_delta_value(delta, "content")
-                if content_delta:
-                    content_parts.append(content_delta)
-                    yield LLMStreamEvent(type="content_delta", content=content_delta)
+                    content_delta = stream_delta_value(delta, "content")
+                    if content_delta:
+                        content_parts.append(content_delta)
+                        yield LLMStreamEvent(type="content_delta", content=content_delta)
 
-                for delta_tool_call in getattr(delta, "tool_calls", None) or []:
-                    merge_stream_tool_call_delta(tool_calls, delta_tool_call)
+                    for delta_tool_call in getattr(delta, "tool_calls", None) or []:
+                        merge_stream_tool_call_delta(tool_calls, delta_tool_call)
 
-            if usage:
-                self._record_vlm_usage(usage, time.perf_counter() - start_time)
+                if usage:
+                    self._record_vlm_usage(usage, time.perf_counter() - start_time)
 
-            yield LLMStreamEvent(
-                type="response",
-                response=build_stream_response(
-                    content="".join(content_parts),
-                    reasoning_content="".join(reasoning_parts),
-                    raw_tool_calls=tool_calls,
-                    finish_reason=finish_reason,
-                    usage=usage,
-                ),
-            )
-        except Exception as e:
-            yield LLMStreamEvent(
-                type="response",
-                response=LLMResponse(
-                    content=f"Error calling LLM in VLM Adapter stream: {str(e)}",
-                    finish_reason="error",
-                ),
-            )
+                yield LLMStreamEvent(
+                    type="response",
+                    response=build_stream_response(
+                        content="".join(content_parts),
+                        reasoning_content="".join(reasoning_parts),
+                        raw_tool_calls=tool_calls,
+                        finish_reason=finish_reason,
+                        usage=usage,
+                    ),
+                )
+                return
+            except Exception as e:
+                if not _is_retryable_rate_limit_error(e):
+                    yield LLMStreamEvent(
+                        type="response",
+                        response=LLMResponse(
+                            content=f"Error calling LLM in VLM Adapter stream: {str(e)}",
+                            finish_reason="error",
+                        ),
+                    )
+                    return
+                delay = _rate_limit_retry_delay(attempt)
+                logger.warning(
+                    "VLM adapter stream rate limited; retrying attempt={} delay={:.1f}s error={}",
+                    attempt,
+                    delay,
+                    e,
+                )
+                await asyncio.sleep(delay)
+                attempt += 1
 
     @staticmethod
     def _usage_value(usage: Any, name: str) -> int:
