@@ -20,6 +20,23 @@ class Role(str, Enum):
     USER = "user"
 
 
+def _coerce_role(role: Any) -> Role:
+    if isinstance(role, Role):
+        return role
+
+    raw_value = getattr(role, "value", None)
+    if isinstance(raw_value, str):
+        role = raw_value
+    elif not isinstance(role, str):
+        raw_name = getattr(role, "name", None)
+        role = raw_name if isinstance(raw_name, str) else str(role)
+
+    normalized = role.strip().lower()
+    if "." in normalized:
+        normalized = normalized.rsplit(".", 1)[-1]
+    return Role(normalized)
+
+
 class AuthMode(str, Enum):
     """Authentication modes for OpenViking server."""
 
@@ -41,6 +58,9 @@ class ResolvedIdentity:
     # account/user.
     from_oauth: bool = False
 
+    def __post_init__(self) -> None:
+        self.role = _coerce_role(self.role)
+
 
 @dataclass
 class RequestContext:
@@ -60,6 +80,9 @@ class RequestContext:
     # prevent a stolen access token from laundering itself into a long-lived
     # refresh-token chain.
     from_oauth: bool = False
+
+    def __post_init__(self) -> None:
+        self.role = _coerce_role(self.role)
 
     @property
     def account_id(self) -> str:

@@ -52,3 +52,27 @@ def test_request_context_account_id_property():
     assert ctx.account_id == "acme"
     assert ctx.role == Role.USER
     assert ctx.user.account_id == "acme"
+
+
+def test_identity_coerces_role_string_variants():
+    """Identity contexts should normalize serialized role values."""
+    identity = ResolvedIdentity(role="Role.ADMIN")
+    assert identity.role == Role.ADMIN
+
+    ctx = RequestContext(user=UserIdentifier("acme", "bob"), role="USER")
+    assert ctx.role == Role.USER
+    assert ctx.role.value == "user"
+
+
+def test_request_context_coerces_foreign_role_object():
+    """RequestContext should tolerate enum-like role objects from integrations."""
+
+    class ForeignRole:
+        name = "ADMIN"
+
+        def __str__(self):
+            return "Role.ADMIN"
+
+    ctx = RequestContext(user=UserIdentifier("acme", "bob"), role=ForeignRole())
+    assert ctx.role == Role.ADMIN
+    assert ctx.role.value == "admin"
