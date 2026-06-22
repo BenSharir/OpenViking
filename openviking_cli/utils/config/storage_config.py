@@ -14,6 +14,32 @@ from .vectordb_config import VectorDBBackendConfig
 logger = get_logger(__name__)
 
 
+class ResourceRetentionConfig(BaseModel):
+    """Configuration for resource version retention."""
+
+    max_versions: int = Field(
+        default=0,
+        description=(
+            "Maximum number of numbered version copies to keep per resource base name. "
+            "When exceeded, oldest versions are pruned after creating new version. "
+            "0 = no limit (current behavior)."
+        ),
+    )
+    max_age_days: int = Field(
+        default=0,
+        description=(
+            "Maximum age in days for numbered version copies. "
+            "Versions older than this may be pruned. 0 = no limit."
+        ),
+    )
+    prune_on_import: bool = Field(
+        default=True,
+        description="Automatically prune old versions when importing new resource.",
+    )
+
+    model_config = {"extra": "forbid"}
+
+
 class StorageConfig(BaseModel):
     """Configuration for storage backend.
 
@@ -41,6 +67,11 @@ class StorageConfig(BaseModel):
     vectordb: VectorDBBackendConfig = Field(
         default_factory=VectorDBBackendConfig,
         description="VectorDB backend configuration",
+    )
+
+    retention: ResourceRetentionConfig = Field(
+        default_factory=ResourceRetentionConfig,
+        description="Resource version retention configuration",
     )
 
     params: Dict[str, Any] = Field(

@@ -400,6 +400,8 @@ class ResourceProcessor:
         from openviking.storage.errors import ResourceBusyError
         from openviking.storage.transaction import get_lock_manager
 
+        from openviking_cli.utils.config import get_openviking_config
+
         viking_fs = get_viking_fs()
         lock_manager = get_lock_manager()
 
@@ -413,6 +415,17 @@ class ResourceProcessor:
                 resource_lock = await self.acquire_resource_lock(
                     lock_manager, dst_path, uri=root_uri, timeout=0.0
                 )
+
+                config = get_openviking_config()
+                retention = config.storage.retention
+                if retention.prune_on_import and retention.max_versions > 0:
+                    existing_versions = await self._find_numbered_versions(candidate_uri, ctx)
+                    await self._prune_old_versions(
+                        existing_versions,
+                        max_keep=retention.max_versions,
+                        ctx=ctx,
+                    )
+
                 return root_uri, resource_lock
             except ResourceBusyError:
                 continue
@@ -420,6 +433,68 @@ class ResourceProcessor:
         raise FileExistsError(
             f"Cannot resolve unique name for {candidate_uri} after {max_attempts} attempts"
         )
+
+    async def _find_numbered_versions(
+        self,
+        base_uri: str,
+        ctx: RequestContext,
+    ) -> list[tuple[str, int, float]]:
+        """Find all numbered versions of a resource.
+
+        Returns: List of (uri, version_number, mtime) sorted by version number.
+        """
+        from openviking_cli.utils.uri import VikingURI
+
+        viking_fs = get_viking_fs()
+        parent_uri = VikingURI(base_uri).parent.uri
+        base_name = base_uri.rsplit("/", 1)[-1]
+
+        versions: list[tuple[str, int, float]] = []
+        try:
+            entries = await viking_fs.ls(parent_uri, ctx=ctx)
+        except Exception:
+            return versions
+
+        for entry in entries:
+            name = entry.get("name", "")
+            entry_uri = entry.get("uri", "")
+            mtime = entry.get("mtime", 0.0)
+
+            if name == base_name:
+                versions.append((entry_uri, 0, mtime))
+            elif name.startswith(f"{base_name}_"):
+                suffix = name[len(base_name) + 1 :]
+                if suffix.isdigit():
+                    versions.append((entry_uri, int(suffix), mtime))
+
+        return sorted(versions, key=lambda x: x[1])
+
+    async def _prune_old_versions(
+        self,
+        versions: list[tuple[str, int, float]],
+        max_keep: int,
+        ctx: RequestContext,
+    ) -> int:
+        """Delete oldest versions beyond max_keep limit.
+
+        Returns: Number of versions deleted.
+        """
+        if len(versions) <= max_keep:
+            return 0
+
+        viking_fs = get_viking_fs()
+        to_delete = versions[:-max_keep]
+        deleted = 0
+
+        for uri, version_num, _ in to_delete:
+            try:
+                await viking_fs.rm(uri, recursive=True, ctx=ctx)
+                logger.info(f"[ResourceProcessor] Pruned old version: {uri}")
+                deleted += 1
+            except Exception as e:
+                logger.warning(f"[ResourceProcessor] Failed to prune {uri}: {e}")
+
+        return deleted
 
     @staticmethod
     async def acquire_resource_lock(
