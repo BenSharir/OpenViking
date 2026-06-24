@@ -438,10 +438,11 @@ class ResourceService:
             create_parent=target.create_parent,
         )
         if candidate_uri:
-            return await self._resource_processor.reserve_unique_candidate(
+            root_uri, resource_lock, _auto_named = await self._resource_processor.reserve_unique_candidate(
                 candidate_uri=candidate_uri,
                 ctx=ctx,
             )
+            return root_uri, resource_lock
 
         from openviking.storage.transaction import get_lock_manager
 
